@@ -100,7 +100,7 @@
     <script>
         // 全局变量
         let notificationsHistory = [];
-        
+
         // 代币类型映射
         const tokenTypeMap = {
             'spot': '现货',
@@ -113,7 +113,7 @@
             loadNotificationsHistory();
             renderNotificationsHistory();
             updateLastUpdateTime();
-            
+
             // 绑定清空通知按钮事件
             document.getElementById('clear-notifications').addEventListener('click', function() {
                 if (confirm('确定要清空所有通知历史吗？')) {
@@ -139,7 +139,7 @@
         function renderNotificationsHistory() {
             const notificationsList = document.getElementById('notifications-list');
             const notificationsCount = document.getElementById('notifications-count');
-            
+
             if (notificationsHistory.length === 0) {
                 notificationsList.innerHTML = `
                     <div class="text-center text-gray-500 py-12">
@@ -151,12 +151,15 @@
                 notificationsCount.textContent = '0 条通知';
                 return;
             }
-            
+
             notificationsList.innerHTML = notificationsHistory.map(notification => {
                 const date = new Date(notification.timestamp);
                 const timeString = date.toLocaleString('zh-CN');
                 const tokenType = tokenTypeMap[notification.type] || notification.type;
-                
+                const conditionText = notification.condition
+                    ? `${notification.condition.hours}h / ${notification.condition.threshold}%`
+                    : '默认条件';
+
                 return `
                     <div class="bg-gray-800 rounded-lg p-4 border-l-4 ${notification.isUp ? 'border-success' : 'border-danger'}">
                         <div class="flex justify-between items-start">
@@ -167,6 +170,9 @@
                                     </span>
                                     <span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-700">
                                         ${tokenType}
+                                    </span>
+                                    <span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-300">
+                                        ${conditionText}
                                     </span>
                                 </div>
                                 <div class="text-sm text-gray-300 mb-2">
@@ -183,7 +189,7 @@
                     </div>
                 `;
             }).join('');
-            
+
             notificationsCount.textContent = `${notificationsHistory.length} 条通知`;
         }
 

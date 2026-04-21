@@ -666,7 +666,14 @@
             bsc: { gecko: 'bsc', label: 'BSC' },
             base: { gecko: 'base', label: 'Base' }
         };
+        const coinGeckoPlatformToChain = {
+            ethereum: 'ethereum',
+            'binance-smart-chain': 'bsc',
+            solana: 'solana',
+            base: 'base'
+        };
         const highMarketCapThreshold = 50000000;
+        const coinGeckoMarketsMaxPages = 10;
         const stableAndNativeSymbols = new Set([
             'USDT', 'USDC', 'DAI', 'BUSD', 'FRAX', 'TUSD', 'USDD', 'USDP',
             'LUSD', 'FDUSD', 'PYUSD', 'USDS', 'AUSD', 'EURC',
@@ -768,8 +775,14 @@
             return normalizeSymbol(token && token.baseToken && token.baseToken.symbol);
         }
 
+        function normalizeAddress(chainId, address) {
+            const value = String(address || '').trim();
+            if (!value) return '';
+            return chainId === 'solana' ? value : value.toLowerCase();
+        }
+
         function getTokenAddress(token) {
-            return String(token && token.baseToken && token.baseToken.address || '').toLowerCase();
+            return normalizeAddress(token && token.chainId, token && token.baseToken && token.baseToken.address);
         }
 
         function getPoolAddressFromGeckoPool(pool) {
@@ -799,6 +812,73 @@
         function isListedOnBinanceOrAlpha(token, excludedSymbols) {
             const symbol = getTokenSymbol(token);
             return Boolean(symbol && excludedSymbols.has(symbol));
+        }
+
+        async function fetchCoinGeckoHighMarketCapTokens(delay) {
+            const loadingStatus = document.getElementById('onchain-loading-status');
+            if (loadingStatus) loadingStatus.textContent = 'Phase 0: CoinGecko读取高市值代币...';
+
+            const [coinsListRes, ...marketResponses] = await Promise.all([
+                fetch('https://api.coingecko.com/api/v3/coins/list?include_platform=true'),
+                ...Array.from({ length: coinGeckoMarketsMaxPages }, (_, index) =>
+                    delay(index * 350).then(() =>
+                        fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${index + 1}&sparkline=false&price_change_percentage=24h`)
+                    )
+                )
+            ]);
+
+            const coinsList = coinsListRes.ok ? await coinsListRes.json() : [];
+            const platformById = {};
+            if (Array.isArray(coinsList)) {
+                coinsList.forEach(coin => {
+                    platformById[coin.id] = coin.platforms || {};
+                });
+            }
+
+            const markets = [];
+            for (const response of marketResponses) {
+                if (!response || !response.ok) continue;
+                const pageData = await response.json();
+                if (Array.isArray(pageData)) {
+                    markets.push(...pageData);
+                }
+            }
+
+            const tokens = [];
+            markets.forEach(market => {
+                const marketCap = Number(market.market_cap || market.fully_diluted_valuation || 0);
+                if (marketCap < highMarketCapThreshold) return;
+
+                const platforms = platformById[market.id] || {};
+                Object.entries(coinGeckoPlatformToChain).forEach(([platformId, chainId]) => {
+                    const address = normalizeAddress(chainId, platforms[platformId]);
+                    if (!address) return;
+
+                    tokens.push({
+                        chainId,
+                        pairAddress: address,
+                        dexId: 'coingecko',
+                        baseToken: {
+                            address,
+                            name: market.name || market.symbol,
+                            symbol: normalizeSymbol(market.symbol)
+                        },
+                        priceUsd: Number(market.current_price || 0),
+                        priceChange: { h24: Number(market.price_change_percentage_24h_in_currency || market.price_change_percentage_24h || 0) },
+                        volume: { h24: Number(market.total_volume || 0) },
+                        liquidity: { usd: 0 },
+                        marketCap,
+                        fdv: Number(market.fully_diluted_valuation || marketCap || 0),
+                        url: `https://www.coingecko.com/en/coins/${market.id}`,
+                        info: { imageUrl: market.image },
+                        source: 'coingecko',
+                        coingeckoId: market.id
+                    });
+                });
+            });
+
+            console.log('[链上代币] CoinGecko高市值候选', tokens.length, '个');
+            return tokens;
         }
 
         // 获取链上代币数据
@@ -860,7 +940,7 @@
 
                     const idParts = baseTokenRef.id.split('_');
                     if (idParts.length < 2) return;
-                    const tokenAddress = idParts.slice(1).join('_').toLowerCase();
+                    const tokenAddress = normalizeAddress(chainId, idParts.slice(1).join('_'));
 
                     const poolSymbol = normalizeSymbol(attrs.name ? attrs.name.split('/')[0].trim() : '');
                     if (skipSymbols.has(poolSymbol.toUpperCase())) return;
@@ -901,17 +981,21 @@
                 const loadingEl = document.getElementById('onchain-loading');
                 const loadingStatus = document.getElementById('onchain-loading-status');
                 if (loadingEl) loadingEl.style.display = 'flex';
+                if (loadingStatus) loadingStatus.textContent = 'Phase 0: CoinGecko读取高市值代币...';
+
+                const coinGeckoTokens = await fetchCoinGeckoHighMarketCapTokens(delay).catch(error => {
+                    console.error('CoinGecko高市值候选获取失败:', error);
+                    return [];
+                });
+
                 if (loadingStatus) loadingStatus.textContent = 'Phase 1: GeckoTerminal发现代币地址...';
 
                 console.log('[链上代币] Phase 1: GeckoTerminal发现代币地址...');
 
                 const geckoPromises = [];
                 const geckoDiscoveryPlans = [
-                    { sort: 'market_cap_usd_desc', pages: 15, label: 'market-cap' },
-                    { sort: 'fdv_usd_desc', pages: 15, label: 'fdv' },
-                    { sort: 'reserve_in_usd_desc', pages: 12, label: 'liquidity' },
-                    { sort: 'h24_volume_usd_desc', pages: 10, label: 'volume' },
-                    { sort: 'h24_tx_count_desc', pages: 6, label: 'tx' }
+                    { sort: 'h24_volume_usd_desc', pages: 15, label: 'volume' },
+                    { sort: 'h24_tx_count_desc', pages: 10, label: 'tx' }
                 ];
                 const NEW_PAGES = 1;
 
@@ -954,7 +1038,7 @@
                 if (loadingStatus) loadingStatus.textContent = `Phase 2: DEX Screener获取详细数据 (${Object.keys(geckoTokens).length}个代币)...`;
 
                 const chainAddresses = {};
-                for (const token of Object.values(geckoTokens)) {
+                for (const token of [...coinGeckoTokens, ...Object.values(geckoTokens)]) {
                     if (!chainAddresses[token.chainId]) chainAddresses[token.chainId] = [];
                     chainAddresses[token.chainId].push(token.baseToken.address);
                 }
@@ -975,7 +1059,7 @@
                                         if (!Array.isArray(pairs)) return;
                                         pairs.forEach(pair => {
                                             if (!pair || !pair.baseToken || !pair.baseToken.address || !allowedChains.has(pair.chainId)) return;
-                                            pair.baseToken.address = String(pair.baseToken.address).toLowerCase();
+                                            pair.baseToken.address = normalizeAddress(pair.chainId, pair.baseToken.address);
                                             const key = `${pair.chainId}-${pair.baseToken.address}`;
                                             if (!dexScreenerMap[key]) {
                                                 dexScreenerMap[key] = pair;
@@ -1002,7 +1086,7 @@
                 const dexExtraSeen = new Set();
                 function addDexExtraPair(pair) {
                     if (pair && pair.baseToken && pair.baseToken.address && allowedChains.has(pair.chainId)) {
-                        pair.baseToken.address = String(pair.baseToken.address).toLowerCase();
+                        pair.baseToken.address = normalizeAddress(pair.chainId, pair.baseToken.address);
                         const key = `${pair.chainId}-${pair.baseToken.address}`;
                         if (!dexExtraSeen.has(key)) {
                             dexExtraSeen.add(key);
@@ -1039,7 +1123,7 @@
                         (Array.isArray(data) ? data : [data]).forEach(item => {
                             if (item && item.chainId && item.tokenAddress && allowedChains.has(item.chainId)) {
                                 if (!boostAddrs[item.chainId]) boostAddrs[item.chainId] = new Set();
-                                boostAddrs[item.chainId].add(item.tokenAddress);
+                                boostAddrs[item.chainId].add(normalizeAddress(item.chainId, item.tokenAddress));
                             }
                         });
                     }
@@ -1079,10 +1163,34 @@
                 const tokenMap = {};
                 const seenKeys = new Set();
 
+                function mergeToken(baseToken, overrideToken) {
+                    return {
+                        ...baseToken,
+                        ...overrideToken,
+                        baseToken: overrideToken.baseToken || baseToken.baseToken,
+                        quoteToken: overrideToken.quoteToken || baseToken.quoteToken,
+                        priceUsd: overrideToken.priceUsd || baseToken.priceUsd,
+                        priceChange: overrideToken.priceChange || baseToken.priceChange,
+                        volume: overrideToken.volume || baseToken.volume,
+                        liquidity: getTokenLiquidity(overrideToken) > 0 ? overrideToken.liquidity : baseToken.liquidity,
+                        marketCap: getTokenMarketCap(baseToken) > 0 ? getTokenMarketCap(baseToken) : getTokenMarketCap(overrideToken),
+                        fdv: overrideToken.fdv || baseToken.fdv,
+                        url: overrideToken.url || baseToken.url,
+                        info: overrideToken.info || baseToken.info,
+                        source: `${baseToken.source || 'unknown'}+${overrideToken.source || 'unknown'}`
+                    };
+                }
+
+                coinGeckoTokens.forEach(token => {
+                    const key = `${token.chainId}-${getTokenAddress(token)}`;
+                    tokenMap[key] = token;
+                    seenKeys.add(key);
+                });
+
                 for (const [key, geckoToken] of Object.entries(geckoTokens)) {
                     if (dexScreenerMap[key]) {
                         const dex = dexScreenerMap[key];
-                        tokenMap[key] = {
+                        const dexToken = {
                             chainId: dex.chainId || geckoToken.chainId,
                             pairAddress: dex.pairAddress || geckoToken.pairAddress,
                             dexId: dex.dexId || geckoToken.dexId,
@@ -1098,8 +1206,9 @@
                             info: dex.info || null,
                             source: 'dexscreener'
                         };
+                        tokenMap[key] = tokenMap[key] ? mergeToken(tokenMap[key], dexToken) : dexToken;
                     } else {
-                        tokenMap[key] = geckoToken;
+                        tokenMap[key] = tokenMap[key] ? mergeToken(tokenMap[key], geckoToken) : geckoToken;
                     }
                     seenKeys.add(key);
                 }
@@ -1111,6 +1220,8 @@
                     if (!seenKeys.has(key)) {
                         seenKeys.add(key);
                         tokenMap[key] = pair;
+                    } else if (tokenMap[key]) {
+                        tokenMap[key] = mergeToken(tokenMap[key], pair);
                     }
                 }
 

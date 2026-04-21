@@ -105,8 +105,20 @@
         const tokenTypeMap = {
             'spot': '现货',
             'futures': '合约',
-            'alpha': 'Alpha'
+            'alpha': 'Alpha',
+            'onchain': '链上'
         };
+
+        function formatNotificationCondition(condition) {
+            if (!condition) return '默认条件';
+            if (condition.mode === 'and' && Array.isArray(condition.conditions)) {
+                return `AND ${condition.conditions.map(c => `${c.hours}h/${c.threshold}%`).join(' + ')}`;
+            }
+            if (condition.mode === 'or' && Array.isArray(condition.conditions)) {
+                return `OR ${condition.conditions.map(c => `${c.hours}h/${c.threshold}%`).join(' / ')}`;
+            }
+            return `${condition.hours}h/${condition.threshold}%`;
+        }
 
         // 初始化函数
         document.addEventListener('DOMContentLoaded', function() {
@@ -156,9 +168,7 @@
                 const date = new Date(notification.timestamp);
                 const timeString = date.toLocaleString('zh-CN');
                 const tokenType = tokenTypeMap[notification.type] || notification.type;
-                const conditionText = notification.condition
-                    ? `${notification.condition.hours}h / ${notification.condition.threshold}%`
-                    : '默认条件';
+                const conditionText = formatNotificationCondition(notification.condition);
 
                 return `
                     <div class="bg-gray-800 rounded-lg p-4 border-l-4 ${notification.isUp ? 'border-success' : 'border-danger'}">

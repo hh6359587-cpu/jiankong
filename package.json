@@ -1,0 +1,9 @@
+{
+  "name": "jiankong",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "backend": "node server.js"
+  }
+}

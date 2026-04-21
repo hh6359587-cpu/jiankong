@@ -424,8 +424,8 @@
                     <div id="onchain-loading" style="display:none;" class="absolute inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-10">
                         <div class="text-center">
                             <i class="fa fa-spinner fa-spin text-4xl text-accent mb-3"></i>
-                            <p class="text-gray-300 text-sm">正在从DEX Screener获取代币数据...</p>
-                            <p class="text-gray-500 text-xs mt-1" id="onchain-loading-status">Phase 1: 发现代币地址</p>
+                            <p class="text-gray-300 text-sm">正在从本地后端聚合链上候选池...</p>
+                            <p class="text-gray-500 text-xs mt-1" id="onchain-loading-status">每10秒刷新行情</p>
                         </div>
                     </div>
                     <table class="w-full text-left">
@@ -693,6 +693,9 @@
         let onchainTokens = [];
         let onchainFilteredTokens = [];
         let onchainRefreshInterval = null;
+        const onchainBackendUrl = 'http://localhost:8090/api/onchain';
+        const onchainRefreshMs = 10 * 1000;
+        let useOnchainBackend = true;
         let binanceAllSymbols = new Set(); // 币安所有已上架代币symbol
         let onchainLastNotifications = {}; // 链上代币通知冷却记录 key: chainId-address
         let onchainNotificationConditions = [
@@ -814,6 +817,41 @@
             return Boolean(symbol && excludedSymbols.has(symbol));
         }
 
+        function updateOnchainUpdateLabel(payload, sourceLabel) {
+            const timeEl = document.getElementById('onchain-update-time');
+            if (!timeEl) return;
+
+            const updatedAt = payload && payload.lastUpdated ? new Date(payload.lastUpdated) : new Date();
+            const count = payload && payload.stats && typeof payload.stats.displayed === 'number'
+                ? payload.stats.displayed
+                : onchainTokens.length;
+            const loadingText = payload && payload.loading ? '，刷新中' : '';
+            timeEl.textContent = `${sourceLabel}: ${updatedAt.toLocaleTimeString('zh-CN')} / ${count}个${loadingText}`;
+        }
+
+        async function fetchOnchainTokensFromBackend(forceRefresh = false) {
+            const url = `${onchainBackendUrl}${forceRefresh ? '?refresh=1' : ''}`;
+            const response = await fetch(url, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`本地链上聚合器不可用: ${response.status}`);
+            }
+
+            const payload = await response.json();
+            if (!payload.ok || !Array.isArray(payload.tokens)) {
+                throw new Error('本地链上聚合器返回格式不正确');
+            }
+
+            onchainTokens = payload.tokens;
+            onchainFilteredTokens = [...onchainTokens];
+            renderOnchainTable();
+            updateOnchainUpdateLabel(payload, '后端刷新');
+
+            const loadingEl = document.getElementById('onchain-loading');
+            if (loadingEl) loadingEl.style.display = payload.loading && onchainTokens.length === 0 ? 'flex' : 'none';
+
+            return true;
+        }
+
         async function fetchCoinGeckoHighMarketCapTokens(delay) {
             const loadingStatus = document.getElementById('onchain-loading-status');
             if (loadingStatus) loadingStatus.textContent = 'Phase 0: CoinGecko读取高市值代币...';
@@ -924,7 +962,17 @@
             }
         }
 
-        async function fetchOnchainTokens() {
+        async function fetchOnchainTokens(forceRefresh = false) {
+            if (useOnchainBackend) {
+                try {
+                    await fetchOnchainTokensFromBackend(forceRefresh);
+                    return;
+                } catch (error) {
+                    console.warn('本地链上聚合器不可用，回退到前端公开API聚合:', error);
+                    useOnchainBackend = false;
+                }
+            }
+
             try {
                 const allowedChains = new Set(Object.keys(targetOnchainChains));
                 const skipSymbols = stableAndNativeSymbols;
@@ -1270,7 +1318,7 @@
 
                 const timeEl = document.getElementById('onchain-update-time');
                 if (timeEl) {
-                    timeEl.textContent = '最后更新: ' + new Date().toLocaleString('zh-CN');
+                    timeEl.textContent = '前端回退: ' + new Date().toLocaleTimeString('zh-CN') + ` / ${onchainTokens.length}个`;
                 }
 
                 console.log('[链上代币] 筛选去重完成:', onchainTokens.length, '个代币');
@@ -1391,8 +1439,8 @@
                 fetchOnchainTokens();
             });
 
-            // 设置链上代币自动刷新（5分钟）
-            onchainRefreshInterval = setInterval(fetchOnchainTokens, 5 * 60 * 1000);
+            // 设置链上代币自动刷新（10秒，优先读取本地后端聚合器）
+            onchainRefreshInterval = setInterval(() => fetchOnchainTokens(false), onchainRefreshMs);
 
             // 连接到币安WebSocket
             connectToBinanceWS();
@@ -3509,7 +3557,8 @@
             document.getElementById('refresh-onchain').addEventListener('click', function() {
                 const icon = this.querySelector('i');
                 icon.classList.add('fa-spin');
-                fetchOnchainTokens().finally(() => {
+                useOnchainBackend = true;
+                fetchOnchainTokens(true).finally(() => {
                     setTimeout(() => icon.classList.remove('fa-spin'), 1000);
                 });
             });

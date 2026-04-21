@@ -3,7 +3,7 @@ import http from 'node:http';
 const PORT = Number(process.env.PORT || 8090);
 const REFRESH_INTERVAL_MS = 10 * 1000;
 const DISCOVERY_INTERVAL_MS = 10 * 60 * 1000;
-const HIGH_MARKET_CAP_THRESHOLD = 50_000_000;
+const HIGH_MARKET_CAP_THRESHOLD = 30_000_000;
 const COINGECKO_MARKET_PAGES = 10;
 const FETCH_TIMEOUT_MS = 8 * 1000;
 const DISCOVERY_CONCURRENCY = 8;

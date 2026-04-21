@@ -676,9 +676,17 @@
         const coinGeckoMarketsMaxPages = 10;
         const stableAndNativeSymbols = new Set([
             'USDT', 'USDC', 'DAI', 'BUSD', 'FRAX', 'TUSD', 'USDD', 'USDP',
-            'LUSD', 'FDUSD', 'PYUSD', 'USDS', 'AUSD', 'EURC',
+            'LUSD', 'FDUSD', 'PYUSD', 'USDS', 'AUSD', 'EURC', 'GHO',
+            'CRVUSD', 'DOLA', 'MIM', 'USD0', 'USDE', 'SUSDE', 'RLUSD',
+            'USDY', 'USYC', 'USD1', 'EURT', 'EURS',
             'WETH', 'WSOL', 'WBNB', 'WBTC', 'CBBTC', 'CBETH', 'RETH', 'WEETH',
             'SOL', 'ETH', 'BNB'
+        ]);
+        const exchangePlatformSymbols = new Set([
+            'BNB', 'OKB', 'OKT', 'LEO', 'CRO', 'GT', 'KCS', 'BGB', 'HT', 'HTX',
+            'MX', 'BIT', 'WBT', 'WRX', 'CET', 'LBK', 'BMX', 'BTR', 'FTT',
+            'FTN', 'NEXO', 'BEST', 'BTMX', 'ASD', 'TKX', 'GATE',
+            'BYD', 'KUB', 'BITCI'
         ]);
 
         // 推送通知相关变量
@@ -776,6 +784,19 @@
 
         function getTokenSymbol(token) {
             return normalizeSymbol(token && token.baseToken && token.baseToken.symbol);
+        }
+
+        function isStableOrExchangePlatform(symbol) {
+            const normalized = normalizeSymbol(symbol);
+            if (!normalized) return false;
+            if (stableAndNativeSymbols.has(normalized) || exchangePlatformSymbols.has(normalized)) return true;
+
+            return normalized.startsWith('USD') ||
+                normalized.endsWith('USD') ||
+                normalized.endsWith('USDT') ||
+                normalized.endsWith('USDC') ||
+                normalized.startsWith('EUR') ||
+                normalized.endsWith('EUR');
         }
 
         function normalizeAddress(chainId, address) {
@@ -956,6 +977,31 @@
                     if (base) binanceAllSymbols.add(base);
                 });
 
+                try {
+                    const alphaInfoRes = await fetch('https://www.binance.com/bapi/defi/v1/public/alpha-trade/get-exchange-info');
+                    const alphaInfo = await alphaInfoRes.json();
+                    (alphaInfo && alphaInfo.data && alphaInfo.data.symbols || []).forEach(s => {
+                        const base = normalizeSymbol(String(s.baseAsset || '').replace(/^ALPHA_/, ''));
+                        if (base) binanceAllSymbols.add(base);
+                    });
+                } catch (e) {
+                    console.warn('获取Alpha交易对失败:', e);
+                }
+
+                try {
+                    const alphaListRes = await fetch('https://www.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list');
+                    const alphaList = await alphaListRes.json();
+                    const list = Array.isArray(alphaList && alphaList.data) ? alphaList.data : (alphaList && alphaList.data && alphaList.data.list) || [];
+                    list.forEach(token => {
+                        const symbol = normalizeSymbol(token.symbol);
+                        const alphaId = normalizeSymbol(String(token.alphaId || '').replace(/^ALPHA_/, ''));
+                        if (symbol) binanceAllSymbols.add(symbol);
+                        if (alphaId) binanceAllSymbols.add(alphaId);
+                    });
+                } catch (e) {
+                    console.warn('获取Alpha代币列表失败:', e);
+                }
+
                 console.log('币安已上架代币（API获取）:', binanceAllSymbols.size, '个');
             } catch (error) {
                 console.error('获取币安交易对列表失败:', error);
@@ -975,7 +1021,6 @@
 
             try {
                 const allowedChains = new Set(Object.keys(targetOnchainChains));
-                const skipSymbols = stableAndNativeSymbols;
 
                 const geckoTokens = {};
                 const geckoSeenKeys = new Set();
@@ -1289,7 +1334,7 @@
                     if (!allowedChains.has(token.chainId)) return false;
                     if (!symbol || !address) return false;
                     if (isListedOnBinanceOrAlpha(token, binanceSymbols)) return false;
-                    if (skipSymbols.has(symbol)) return false;
+                    if (isStableOrExchangePlatform(symbol)) return false;
 
                     return marketCap >= highMarketCapThreshold;
                 });

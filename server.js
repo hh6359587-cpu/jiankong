@@ -20,8 +20,16 @@ const alphaSymbols = new Set([
 
 const stableAndNativeSymbols = new Set([
   'USDT', 'USDC', 'DAI', 'BUSD', 'FRAX', 'TUSD', 'USDD', 'USDP', 'LUSD',
-  'FDUSD', 'PYUSD', 'USDS', 'AUSD', 'EURC', 'WETH', 'WSOL', 'WBNB', 'WBTC',
-  'CBBTC', 'CBETH', 'RETH', 'WEETH', 'SOL', 'ETH', 'BNB'
+  'FDUSD', 'PYUSD', 'USDS', 'AUSD', 'EURC', 'GHO', 'CRVUSD', 'DOLA', 'MIM',
+  'USD0', 'USDE', 'SUSDE', 'RLUSD', 'USDY', 'USYC', 'USD1', 'EURT', 'EURS',
+  'WETH', 'WSOL', 'WBNB', 'WBTC', 'CBBTC', 'CBETH', 'RETH', 'WEETH',
+  'SOL', 'ETH', 'BNB'
+]);
+
+const exchangePlatformSymbols = new Set([
+  'BNB', 'OKB', 'OKT', 'LEO', 'CRO', 'GT', 'KCS', 'BGB', 'HT', 'HTX', 'MX',
+  'BIT', 'WBT', 'WRX', 'CET', 'LBK', 'BMX', 'BTR', 'FTT', 'FTN', 'NEXO',
+  'BEST', 'BTMX', 'ASD', 'TKX', 'GATE', 'BYD', 'KUB', 'BITCI'
 ]);
 
 const state = {
@@ -34,6 +42,7 @@ const state = {
     candidates: 0,
     displayed: 0,
     binanceExcluded: 0,
+    platformExcluded: 0,
     stableExcluded: 0,
     errors: []
   }
@@ -69,6 +78,29 @@ function getLiquidity(token) {
 
 function getVolume24h(token) {
   return Number(token.volume?.h24 || 0) || 0;
+}
+
+function isStableSymbol(symbol) {
+  const normalized = normalizeSymbol(symbol);
+  if (!normalized) return false;
+  if (stableAndNativeSymbols.has(normalized)) return true;
+
+  return (
+    normalized.startsWith('USD') ||
+    normalized.endsWith('USD') ||
+    normalized.endsWith('USDT') ||
+    normalized.endsWith('USDC') ||
+    normalized.startsWith('EUR') ||
+    normalized.endsWith('EUR')
+  );
+}
+
+function isExchangePlatformSymbol(symbol) {
+  return exchangePlatformSymbols.has(normalizeSymbol(symbol));
+}
+
+function isStableOrExchangePlatform(symbol) {
+  return isStableSymbol(symbol) || isExchangePlatformSymbol(symbol);
 }
 
 function getAlertScore(token) {
@@ -121,6 +153,23 @@ async function fetchBinanceExcludedSymbols() {
   for (const symbol of futures.symbols || []) {
     const base = normalizeSymbol(symbol.baseAsset);
     if (base) excluded.add(base);
+  }
+
+  const alphaExchangeInfo = await fetchJson('https://www.binance.com/bapi/defi/v1/public/alpha-trade/get-exchange-info')
+    .catch(() => ({ data: { symbols: [] } }));
+  for (const symbol of alphaExchangeInfo.data?.symbols || []) {
+    const base = normalizeSymbol(String(symbol.baseAsset || '').replace(/^ALPHA_/, ''));
+    if (base) excluded.add(base);
+  }
+
+  const alphaTokenList = await fetchJson('https://www.binance.com/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list')
+    .catch(() => ({ data: [] }));
+  const alphaTokens = Array.isArray(alphaTokenList.data) ? alphaTokenList.data : alphaTokenList.data?.list || [];
+  for (const token of alphaTokens) {
+    const symbol = normalizeSymbol(token.symbol);
+    const alphaId = normalizeSymbol(String(token.alphaId || '').replace(/^ALPHA_/, ''));
+    if (symbol) excluded.add(symbol);
+    if (alphaId) excluded.add(alphaId);
   }
 
   return excluded;
@@ -318,6 +367,7 @@ function mergeToken(base, next) {
 
 function filterAndRank(tokens, excludedSymbols) {
   let binanceExcluded = 0;
+  let platformExcluded = 0;
   let stableExcluded = 0;
   const merged = new Map();
 
@@ -325,8 +375,12 @@ function filterAndRank(tokens, excludedSymbols) {
     const symbol = normalizeSymbol(token.baseToken?.symbol);
     const address = normalizeAddress(token.chainId, token.baseToken?.address);
     if (!targetChains[token.chainId] || !symbol || !address) continue;
-    if (stableAndNativeSymbols.has(symbol)) {
+    if (isStableSymbol(symbol)) {
       stableExcluded++;
+      continue;
+    }
+    if (isExchangePlatformSymbol(symbol)) {
+      platformExcluded++;
       continue;
     }
     if (excludedSymbols.has(symbol)) {
@@ -358,7 +412,7 @@ function filterAndRank(tokens, excludedSymbols) {
 
   const ranked = Array.from(bySymbolChain.values()).sort(compareTokens);
 
-  return { tokens: ranked, binanceExcluded, stableExcluded };
+  return { tokens: ranked, binanceExcluded, platformExcluded, stableExcluded };
 }
 
 async function discoverCandidates() {
@@ -389,6 +443,7 @@ async function discoverCandidates() {
     candidates: candidates.length,
     displayed: filtered.tokens.length,
     binanceExcluded: filtered.binanceExcluded,
+    platformExcluded: filtered.platformExcluded,
     stableExcluded: filtered.stableExcluded,
     errors
   };

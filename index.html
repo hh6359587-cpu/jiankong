@@ -660,6 +660,19 @@
             'CHZUSDT', 'AAVEUSDT', 'MKRUSDT', 'UNIUSDT', 'COMPUSDT',
             'LINKUSDT', 'MATICUSDT', 'SOLUSDT', 'AVAXUSDT', 'DOTUSDT'
         ]);
+        const targetOnchainChains = {
+            solana: { gecko: 'solana', label: 'SOL' },
+            ethereum: { gecko: 'eth', label: 'ETH' },
+            bsc: { gecko: 'bsc', label: 'BSC' },
+            base: { gecko: 'base', label: 'Base' }
+        };
+        const highMarketCapThreshold = 50000000;
+        const stableAndNativeSymbols = new Set([
+            'USDT', 'USDC', 'DAI', 'BUSD', 'FRAX', 'TUSD', 'USDD', 'USDP',
+            'LUSD', 'FDUSD', 'PYUSD', 'USDS', 'AUSD', 'EURC',
+            'WETH', 'WSOL', 'WBNB', 'WBTC', 'CBBTC', 'CBETH', 'RETH', 'WEETH',
+            'SOL', 'ETH', 'BNB'
+        ]);
 
         // 推送通知相关变量
         let pushSettings = {
@@ -731,6 +744,63 @@
             return num.toFixed(2);
         }
 
+        function normalizeSymbol(symbol) {
+            return String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        }
+
+        function baseSymbolFromPair(symbol) {
+            return normalizeSymbol(symbol).replace(/(USDT|BUSD|USDC|FDUSD|TUSD)$/g, '');
+        }
+
+        function getTokenMarketCap(token) {
+            return Number(token && (token.marketCap || token.fdv || 0)) || 0;
+        }
+
+        function getTokenLiquidity(token) {
+            return Number(token && token.liquidity && token.liquidity.usd) || 0;
+        }
+
+        function getTokenVolume24h(token) {
+            return Number(token && token.volume && token.volume.h24) || 0;
+        }
+
+        function getTokenSymbol(token) {
+            return normalizeSymbol(token && token.baseToken && token.baseToken.symbol);
+        }
+
+        function getTokenAddress(token) {
+            return String(token && token.baseToken && token.baseToken.address || '').toLowerCase();
+        }
+
+        function getPoolAddressFromGeckoPool(pool) {
+            const attrs = pool.attributes || {};
+            if (attrs.address) return attrs.address;
+            if (!pool.id) return '';
+            const idParts = String(pool.id).split('_');
+            return idParts.length > 1 ? idParts.slice(1).join('_') : pool.id;
+        }
+
+        function getBinanceExcludedSymbols() {
+            const excluded = new Set(binanceAllSymbols);
+
+            tokensData.forEach(token => {
+                const symbol = baseSymbolFromPair(token.symbol);
+                if (symbol) excluded.add(symbol);
+            });
+
+            alphaTokens.forEach(symbol => {
+                const base = baseSymbolFromPair(symbol);
+                if (base) excluded.add(base);
+            });
+
+            return excluded;
+        }
+
+        function isListedOnBinanceOrAlpha(token, excludedSymbols) {
+            const symbol = getTokenSymbol(token);
+            return Boolean(symbol && excludedSymbols.has(symbol));
+        }
+
         // 获取链上代币数据
         // 从币安API获取所有已上架代币列表
         async function fetchBinanceAllSymbols() {
@@ -763,6 +833,11 @@
                     console.warn('获取合约交易对失败:', e);
                 }
 
+                alphaTokens.forEach(symbol => {
+                    const base = baseSymbolFromPair(symbol);
+                    if (base) binanceAllSymbols.add(base);
+                });
+
                 console.log('币安已上架代币（API获取）:', binanceAllSymbols.size, '个');
             } catch (error) {
                 console.error('获取币安交易对列表失败:', error);
@@ -771,9 +846,8 @@
 
         async function fetchOnchainTokens() {
             try {
-                const geckoChainMap = { 'solana': 'solana', 'ethereum': 'eth', 'bsc': 'bsc', 'base': 'base' };
-                const allowedChains = new Set(['solana', 'ethereum', 'bsc', 'base']);
-                const skipSymbols = new Set(['USDT','USDC','DAI','BUSD','FRAX','TUSD','USDD','USDP','LUSD','FDUSD','PYUSD','WETH','WSOL','WBNB','WBTC','CBETH','RETH','WEETH','USDS','AUSD','EURC','CBBTC','SOL','ETH','BNB']);
+                const allowedChains = new Set(Object.keys(targetOnchainChains));
+                const skipSymbols = stableAndNativeSymbols;
 
                 const geckoTokens = {};
                 const geckoSeenKeys = new Set();
@@ -786,9 +860,9 @@
 
                     const idParts = baseTokenRef.id.split('_');
                     if (idParts.length < 2) return;
-                    const tokenAddress = idParts.slice(1).join('_');
+                    const tokenAddress = idParts.slice(1).join('_').toLowerCase();
 
-                    const poolSymbol = attrs.name ? attrs.name.split('/')[0].trim() : '';
+                    const poolSymbol = normalizeSymbol(attrs.name ? attrs.name.split('/')[0].trim() : '');
                     if (skipSymbols.has(poolSymbol.toUpperCase())) return;
 
                     const key = `${chainId}-${tokenAddress}`;
@@ -798,10 +872,11 @@
                     const fdv = parseFloat(attrs.fdv_usd) || 0;
                     const mcap = parseFloat(attrs.market_cap_usd) || 0;
                     const dexId = (rels.dex && rels.dex.data && rels.dex.data.id) || '';
+                    const poolAddress = getPoolAddressFromGeckoPool(pool);
 
                     geckoTokens[key] = {
                         chainId,
-                        pairAddress: pool.id || attrs.address,
+                        pairAddress: poolAddress,
                         dexId,
                         baseToken: { address: tokenAddress, name: poolSymbol, symbol: poolSymbol },
                         priceUsd: parseFloat(attrs.base_token_price_usd) || 0,
@@ -814,7 +889,7 @@
                         liquidity: { usd: parseFloat(attrs.reserve_in_usd) || 0 },
                         marketCap: mcap > 0 ? mcap : fdv,
                         fdv,
-                        url: `https://dexscreener.com/${chainId}/${attrs.address}`,
+                        url: `https://dexscreener.com/${chainId}/${poolAddress || tokenAddress}`,
                         source: 'geckoterminal'
                     };
                 }
@@ -831,11 +906,17 @@
                 console.log('[链上代币] Phase 1: GeckoTerminal发现代币地址...');
 
                 const geckoPromises = [];
-                const VOL_PAGES = 15;
-                const TX_PAGES = 10;
-                const NEW_PAGES = 3;
+                const geckoDiscoveryPlans = [
+                    { sort: 'market_cap_usd_desc', pages: 15, label: 'market-cap' },
+                    { sort: 'fdv_usd_desc', pages: 15, label: 'fdv' },
+                    { sort: 'reserve_in_usd_desc', pages: 12, label: 'liquidity' },
+                    { sort: 'h24_volume_usd_desc', pages: 10, label: 'volume' },
+                    { sort: 'h24_tx_count_desc', pages: 6, label: 'tx' }
+                ];
+                const NEW_PAGES = 1;
 
-                for (const [chainId, geckoChain] of Object.entries(geckoChainMap)) {
+                for (const [chainId, chainConfig] of Object.entries(targetOnchainChains)) {
+                    const geckoChain = chainConfig.gecko;
                     geckoPromises.push(
                         fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/trending_pools`)
                             .then(res => res.json())
@@ -843,27 +924,18 @@
                             .catch(err => console.error(`GeckoTerminal trending ${geckoChain}失败:`, err))
                     );
 
-                    for (let page = 1; page <= VOL_PAGES; page++) {
-                        geckoPromises.push(
-                            delay((page - 1) * 250).then(() =>
-                                fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/pools?page=${page}&sort=h24_volume_usd_desc`)
-                                    .then(res => res.json())
-                                    .then(data => { if (data && data.data && Array.isArray(data.data)) data.data.forEach(p => processGeckoPool(p, chainId)); })
-                                    .catch(err => console.error(`GeckoTerminal ${geckoChain} vol p${page}失败:`, err))
-                            )
-                        );
-                    }
-
-                    for (let page = 1; page <= TX_PAGES; page++) {
-                        geckoPromises.push(
-                            delay(VOL_PAGES * 250 + (page - 1) * 250).then(() =>
-                                fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/pools?page=${page}&sort=h24_tx_count_desc`)
-                                    .then(res => res.json())
-                                    .then(data => { if (data && data.data && Array.isArray(data.data)) data.data.forEach(p => processGeckoPool(p, chainId)); })
-                                    .catch(err => console.error(`GeckoTerminal ${geckoChain} tx p${page}失败:`, err))
-                            )
-                        );
-                    }
+                    geckoDiscoveryPlans.forEach((plan, planIndex) => {
+                        for (let page = 1; page <= plan.pages; page++) {
+                            geckoPromises.push(
+                                delay((planIndex * 2000) + ((page - 1) * 180)).then(() =>
+                                    fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/pools?page=${page}&sort=${plan.sort}`)
+                                        .then(res => res.json())
+                                        .then(data => { if (data && data.data && Array.isArray(data.data)) data.data.forEach(p => processGeckoPool(p, chainId)); })
+                                        .catch(err => console.error(`GeckoTerminal ${geckoChain} ${plan.label} p${page}失败:`, err))
+                                )
+                            );
+                        }
+                    });
 
                     for (let page = 1; page <= NEW_PAGES; page++) {
                         geckoPromises.push(
@@ -903,6 +975,7 @@
                                         if (!Array.isArray(pairs)) return;
                                         pairs.forEach(pair => {
                                             if (!pair || !pair.baseToken || !pair.baseToken.address || !allowedChains.has(pair.chainId)) return;
+                                            pair.baseToken.address = String(pair.baseToken.address).toLowerCase();
                                             const key = `${pair.chainId}-${pair.baseToken.address}`;
                                             if (!dexScreenerMap[key]) {
                                                 dexScreenerMap[key] = pair;
@@ -929,6 +1002,7 @@
                 const dexExtraSeen = new Set();
                 function addDexExtraPair(pair) {
                     if (pair && pair.baseToken && pair.baseToken.address && allowedChains.has(pair.chainId)) {
+                        pair.baseToken.address = String(pair.baseToken.address).toLowerCase();
                         const key = `${pair.chainId}-${pair.baseToken.address}`;
                         if (!dexExtraSeen.has(key)) {
                             dexExtraSeen.add(key);
@@ -986,7 +1060,10 @@
                     console.error('获取boost数据失败:', err);
                 }
 
-                const extraSlugs = ['meme', 'ai', 'defi', 'gaming', 'solana-ecosystem', 'base-ecosystem', 'bsc-ecosystem', 'ethereum-ecosystem'];
+                const extraSlugs = [
+                    'meme', 'ai', 'defi', 'gaming', 'depin', 'rwa',
+                    'solana-ecosystem', 'base-ecosystem', 'bsc-ecosystem', 'ethereum-ecosystem'
+                ];
                 await Promise.all(extraSlugs.map(slug =>
                     fetch(`https://api.dexscreener.com/metas/meta/v1/${slug}`)
                         .then(res => res.json())
@@ -1042,35 +1119,32 @@
                 console.log('[链上代币] Phase 5: 筛选...');
                 if (loadingStatus) loadingStatus.textContent = 'Phase 5: 筛选代币...';
 
-                const binanceSymbols = new Set(binanceAllSymbols);
-                tokensData.forEach(token => {
-                    const symbol = token.symbol.replace('USDT', '').replace('BUSD', '').replace('USDC', '');
-                    if (symbol) binanceSymbols.add(symbol.toUpperCase());
-                });
-                console.log('[链上代币] 币安已上架代币:', binanceSymbols.size, '个');
+                const binanceSymbols = getBinanceExcludedSymbols();
+                console.log('[链上代币] 币安现货/合约/Alpha排除代币:', binanceSymbols.size, '个');
 
                 onchainTokens = Object.values(tokenMap).filter(token => {
-                    const symbol = (token.baseToken && token.baseToken.symbol || '').toUpperCase();
-                    const marketCap = token.marketCap || token.fdv || 0;
-                    const liquidity = (token.liquidity && token.liquidity.usd) || 0;
-                    const volume24h = (token.volume && token.volume.h24) || 0;
+                    const symbol = getTokenSymbol(token);
+                    const marketCap = getTokenMarketCap(token);
+                    const address = getTokenAddress(token);
 
-                    if (binanceSymbols.has(symbol)) return false;
+                    if (!allowedChains.has(token.chainId)) return false;
+                    if (!symbol || !address) return false;
+                    if (isListedOnBinanceOrAlpha(token, binanceSymbols)) return false;
                     if (skipSymbols.has(symbol)) return false;
 
-                    return marketCap >= 50000000 && liquidity >= 2000000 && volume24h >= 1000000;
+                    return marketCap >= highMarketCapThreshold;
                 });
 
                 onchainTokens.sort((a, b) => {
-                    const mcA = a.marketCap || a.fdv || 0;
-                    const mcB = b.marketCap || b.fdv || 0;
-                    return mcB - mcA;
+                    const mcDiff = getTokenMarketCap(b) - getTokenMarketCap(a);
+                    if (mcDiff !== 0) return mcDiff;
+                    return getTokenLiquidity(b) - getTokenLiquidity(a);
                 });
 
                 const symbolSeen = new Set();
                 const dedupedTokens = [];
                 for (const token of onchainTokens) {
-                    const key = `${(token.baseToken && token.baseToken.symbol || '').toUpperCase()}-${token.chainId}`;
+                    const key = `${getTokenSymbol(token)}-${token.chainId}`;
                     if (!symbolSeen.has(key)) {
                         symbolSeen.add(key);
                         dedupedTokens.push(token);
@@ -1104,19 +1178,14 @@
         function refilterOnchainTokens() {
             if (onchainTokens.length === 0) return;
 
-            const binanceSymbols = new Set(binanceAllSymbols);
-
-            tokensData.forEach(token => {
-                const symbol = token.symbol.replace('USDT', '').replace('BUSD', '').replace('USDC', '');
-                if (symbol) binanceSymbols.add(symbol.toUpperCase());
-            });
+            const binanceSymbols = getBinanceExcludedSymbols();
 
             const before = onchainTokens.length;
-            onchainTokens = onchainTokens.filter(token => !binanceSymbols.has(token.baseToken.symbol.toUpperCase()));
+            onchainTokens = onchainTokens.filter(token => !isListedOnBinanceOrAlpha(token, binanceSymbols));
             const removed = before - onchainTokens.length;
 
             if (removed > 0) {
-                console.log(`重新过滤链上代币：移除${removed}个已上币安代币，剩余${onchainTokens.length}个`);
+                console.log(`重新过滤链上代币：移除${removed}个已上币安/Alpha代币，剩余${onchainTokens.length}个`);
                 onchainFilteredTokens = [...onchainTokens];
                 renderOnchainTable();
             }
@@ -1150,9 +1219,9 @@
             tableBody.innerHTML = displayTokens.map(token => {
                 const price = token.priceUsd ? parseFloat(token.priceUsd) : 0;
                 const priceChange = (token.priceChange && token.priceChange.h24) || 0;
-                const marketCap = token.marketCap || token.fdv || 0;
-                const liquidity = (token.liquidity && token.liquidity.usd) || 0;
-                const volume24h = (token.volume && token.volume.h24) || 0;
+                const marketCap = getTokenMarketCap(token);
+                const liquidity = getTokenLiquidity(token);
+                const volume24h = getTokenVolume24h(token);
                 const chain = chainNameMap[token.chainId] || token.chainId;
                 const isUp = priceChange >= 0;
                 const imageUrl = token.info && token.info.imageUrl;

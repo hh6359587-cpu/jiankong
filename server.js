@@ -5,6 +5,9 @@ const REFRESH_INTERVAL_MS = 10 * 1000;
 const DISCOVERY_INTERVAL_MS = 10 * 60 * 1000;
 const HIGH_MARKET_CAP_THRESHOLD = 50_000_000;
 const COINGECKO_MARKET_PAGES = 10;
+const FETCH_TIMEOUT_MS = 8 * 1000;
+const DISCOVERY_CONCURRENCY = 8;
+const QUOTE_CONCURRENCY = 6;
 
 const targetChains = {
   solana: { gecko: 'solana', label: 'SOL', coingeckoPlatform: 'solana' },
@@ -34,6 +37,8 @@ const exchangePlatformSymbols = new Set([
 
 const state = {
   loading: false,
+  discoveryLoading: false,
+  quoteLoading: false,
   lastUpdated: null,
   lastDiscovery: null,
   candidates: [],
@@ -49,6 +54,33 @@ const state = {
 };
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function updateLoadingState() {
+  state.loading = state.discoveryLoading || state.quoteLoading;
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = [];
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const currentIndex = index++;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 function normalizeSymbol(symbol) {
   return String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -131,14 +163,22 @@ function compareTokens(a, b) {
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { accept: 'application/json', 'user-agent': 'jiankong-local-monitor/0.2.0' },
-    ...options
-  });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}: ${url}`);
+  const { timeoutMs = FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { accept: 'application/json', 'user-agent': 'jiankong-local-monitor/0.2.0', ...(fetchOptions.headers || {}) },
+      ...fetchOptions,
+      signal: fetchOptions.signal || controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}: ${url}`);
+    }
+    return response.json();
+  } finally {
+    clearTimeout(timeout);
   }
-  return response.json();
 }
 
 async function fetchBinanceExcludedSymbols() {
@@ -184,7 +224,7 @@ async function fetchCoinGeckoCandidates() {
 
   const marketPages = await Promise.all(
     Array.from({ length: COINGECKO_MARKET_PAGES }, async (_, index) => {
-      await sleep(index * 500);
+      await sleep(index * 200);
       return fetchJson(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${index + 1}&sparkline=false&price_change_percentage=24h`)
         .catch(error => {
           console.warn(`CoinGecko market page ${index + 1} skipped: ${error.message}`);
@@ -275,25 +315,30 @@ async function fetchGeckoCandidates() {
     { sort: 'h24_volume_usd_desc', pages: 12 },
     { sort: 'h24_tx_count_desc', pages: 8 }
   ];
+  const tasks = [];
 
   for (const [chainId, config] of Object.entries(targetChains)) {
-    const trending = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/${config.gecko}/trending_pools`)
-      .catch(() => ({ data: [] }));
-    for (const pool of trending.data || []) {
-      const token = geckoPoolToToken(pool, chainId);
-      if (token) candidates.push(token);
-    }
+    tasks.push({ chainId, url: `https://api.geckoterminal.com/api/v2/networks/${config.gecko}/trending_pools` });
 
     for (const plan of plans) {
       for (let page = 1; page <= plan.pages; page++) {
-        await sleep(120);
-        const data = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/${config.gecko}/pools?page=${page}&sort=${plan.sort}`)
-          .catch(() => ({ data: [] }));
-        for (const pool of data.data || []) {
-          const token = geckoPoolToToken(pool, chainId);
-          if (token) candidates.push(token);
-        }
+        tasks.push({
+          chainId,
+          url: `https://api.geckoterminal.com/api/v2/networks/${config.gecko}/pools?page=${page}&sort=${plan.sort}`
+        });
       }
+    }
+  }
+
+  const pages = await mapWithConcurrency(tasks, DISCOVERY_CONCURRENCY, task =>
+    fetchJson(task.url).catch(() => ({ data: [], chainId: task.chainId }))
+  );
+
+  for (const [index, data] of pages.entries()) {
+    const chainId = tasks[index].chainId;
+    for (const pool of data.data || []) {
+      const token = geckoPoolToToken(pool, chainId);
+      if (token) candidates.push(token);
     }
   }
 
@@ -314,11 +359,8 @@ async function fetchDexExtraCandidates() {
     'https://api.dexscreener.com/token-boosts/top/v1'
   ];
 
-  const boostItems = [];
-  for (const endpoint of endpoints) {
-    const data = await fetchJson(endpoint).catch(() => []);
-    boostItems.push(...(Array.isArray(data) ? data : [data]));
-  }
+  const boostResponses = await Promise.all(endpoints.map(endpoint => fetchJson(endpoint).catch(() => [])));
+  const boostItems = boostResponses.flatMap(data => Array.isArray(data) ? data : [data]);
 
   const byChain = {};
   for (const item of boostItems) {
@@ -329,11 +371,12 @@ async function fetchDexExtraCandidates() {
 
   for (const [chainId, addresses] of Object.entries(byChain)) {
     const arr = Array.from(addresses);
-    for (let i = 0; i < arr.length; i += 30) {
-      const pairs = await fetchJson(`https://api.dexscreener.com/tokens/v1/${chainId}/${arr.slice(i, i + 30).join(',')}`)
+    const batches = chunkArray(arr, 30);
+    await mapWithConcurrency(batches, QUOTE_CONCURRENCY, async batch => {
+      const pairs = await fetchJson(`https://api.dexscreener.com/tokens/v1/${chainId}/${batch.join(',')}`)
         .catch(() => []);
       if (Array.isArray(pairs)) pairs.forEach(addPair);
-    }
+    });
   }
 
   return candidates;
@@ -451,7 +494,8 @@ async function discoverCandidates() {
 
 async function refreshDexQuotes() {
   const byChain = {};
-  for (const token of state.candidates) {
+  const candidates = state.candidates.slice();
+  for (const token of candidates) {
     const address = normalizeAddress(token.chainId, token.baseToken?.address);
     if (!address) continue;
     if (!byChain[token.chainId]) byChain[token.chainId] = [];
@@ -459,27 +503,33 @@ async function refreshDexQuotes() {
   }
 
   const freshPairs = new Map();
+  const tasks = [];
   for (const [chainId, addresses] of Object.entries(byChain)) {
     const unique = Array.from(new Set(addresses));
-    for (let i = 0; i < unique.length; i += 30) {
-      const batch = unique.slice(i, i + 30);
-      const pairs = await fetchJson(`https://api.dexscreener.com/tokens/v1/${chainId}/${batch.join(',')}`)
-        .catch(() => []);
-      if (!Array.isArray(pairs)) continue;
-      for (const pair of pairs) {
-        if (!pair?.baseToken?.address) continue;
-        pair.baseToken.address = normalizeAddress(chainId, pair.baseToken.address);
-        const key = `${chainId}-${pair.baseToken.address}`;
-        const current = freshPairs.get(key);
-        if (!current || getLiquidity(pair) > getLiquidity(current)) {
-          freshPairs.set(key, { ...pair, source: 'dexscreener-live' });
-        }
-      }
-      await sleep(80);
+    for (const batch of chunkArray(unique, 30)) {
+      tasks.push({ chainId, batch });
     }
   }
 
-  state.tokens = state.candidates.map(token => {
+  const responses = await mapWithConcurrency(tasks, QUOTE_CONCURRENCY, async task => {
+    const pairs = await fetchJson(`https://api.dexscreener.com/tokens/v1/${task.chainId}/${task.batch.join(',')}`)
+      .catch(() => []);
+    return { chainId: task.chainId, pairs: Array.isArray(pairs) ? pairs : [] };
+  });
+
+  for (const response of responses) {
+    for (const pair of response.pairs) {
+      if (!pair?.baseToken?.address) continue;
+      pair.baseToken.address = normalizeAddress(response.chainId, pair.baseToken.address);
+      const key = `${response.chainId}-${pair.baseToken.address}`;
+      const current = freshPairs.get(key);
+      if (!current || getLiquidity(pair) > getLiquidity(current)) {
+        freshPairs.set(key, { ...pair, chainId: response.chainId, source: 'dexscreener-live' });
+      }
+    }
+  }
+
+  state.tokens = candidates.map(token => {
     const fresh = freshPairs.get(tokenKey(token));
     return fresh ? mergeToken(token, fresh) : token;
   }).sort(compareTokens);
@@ -487,18 +537,45 @@ async function refreshDexQuotes() {
   state.stats.displayed = state.tokens.length;
 }
 
-async function refreshAll(forceDiscovery = false) {
-  if (state.loading) return;
-  state.loading = true;
+async function runDiscovery() {
+  if (state.discoveryLoading) return;
+  state.discoveryLoading = true;
+  updateLoadingState();
+  const startedAt = Date.now();
   try {
-    const discoveryStale = !state.lastDiscovery || Date.now() - Date.parse(state.lastDiscovery) > DISCOVERY_INTERVAL_MS;
-    if (forceDiscovery || discoveryStale || state.candidates.length === 0) {
-      await discoverCandidates();
-    }
-    await refreshDexQuotes();
+    await discoverCandidates();
+    state.stats.lastDiscoveryDurationMs = Date.now() - startedAt;
   } finally {
-    state.loading = false;
+    state.discoveryLoading = false;
+    updateLoadingState();
   }
+}
+
+async function runQuoteRefresh() {
+  if (state.quoteLoading || state.candidates.length === 0) return;
+  state.quoteLoading = true;
+  updateLoadingState();
+  const startedAt = Date.now();
+  try {
+    await refreshDexQuotes();
+    state.stats.lastRefreshDurationMs = Date.now() - startedAt;
+  } finally {
+    state.quoteLoading = false;
+    updateLoadingState();
+  }
+}
+
+function refreshAll(forceDiscovery = false) {
+  const discoveryStale = !state.lastDiscovery || Date.now() - Date.parse(state.lastDiscovery) > DISCOVERY_INTERVAL_MS;
+  if (forceDiscovery || discoveryStale || state.candidates.length === 0) {
+    const discoveryPromise = runDiscovery().catch(error => state.stats.errors.push(error.message));
+    if (state.candidates.length === 0) {
+      discoveryPromise.then(() => runQuoteRefresh()).catch(error => state.stats.errors.push(error.message));
+      return;
+    }
+  }
+
+  runQuoteRefresh().catch(error => state.stats.errors.push(error.message));
 }
 
 function sendJson(res, statusCode, payload) {
@@ -521,20 +598,29 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/health') {
-    sendJson(res, 200, { ok: true, loading: state.loading, lastUpdated: state.lastUpdated });
+    sendJson(res, 200, {
+      ok: true,
+      loading: state.loading,
+      discoveryLoading: state.discoveryLoading,
+      quoteLoading: state.quoteLoading,
+      lastUpdated: state.lastUpdated,
+      lastDiscovery: state.lastDiscovery
+    });
     return;
   }
 
   if (url.pathname === '/api/onchain') {
     if (url.searchParams.get('refresh') === '1') {
-      refreshAll(true).catch(error => state.stats.errors.push(error.message));
-    } else if (!state.loading && (!state.lastUpdated || Date.now() - Date.parse(state.lastUpdated) > REFRESH_INTERVAL_MS)) {
-      refreshAll(false).catch(error => state.stats.errors.push(error.message));
+      refreshAll(true);
+    } else if (!state.quoteLoading && (!state.lastUpdated || Date.now() - Date.parse(state.lastUpdated) > REFRESH_INTERVAL_MS)) {
+      refreshAll(false);
     }
 
     sendJson(res, 200, {
       ok: true,
       loading: state.loading,
+      discoveryLoading: state.discoveryLoading,
+      quoteLoading: state.quoteLoading,
       lastUpdated: state.lastUpdated,
       lastDiscovery: state.lastDiscovery,
       refreshIntervalMs: REFRESH_INTERVAL_MS,
@@ -550,14 +636,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Onchain aggregator running at http://localhost:${PORT}`);
-  refreshAll(true).catch(error => {
-    state.stats.errors.push(error.message);
-    console.error(error);
-  });
+  refreshAll(true);
   setInterval(() => {
-    refreshAll(false).catch(error => {
-      state.stats.errors.push(error.message);
-      console.error(error);
-    });
+    refreshAll(false);
   }, REFRESH_INTERVAL_MS);
 });

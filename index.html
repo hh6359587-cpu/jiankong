@@ -846,7 +846,10 @@
             const count = payload && payload.stats && typeof payload.stats.displayed === 'number'
                 ? payload.stats.displayed
                 : onchainTokens.length;
-            const loadingText = payload && payload.loading ? '，刷新中' : '';
+            const statusParts = [];
+            if (payload && payload.quoteLoading) statusParts.push('行情刷新中');
+            if (payload && payload.discoveryLoading) statusParts.push('候选发现中');
+            const loadingText = statusParts.length ? `，${statusParts.join('/')}` : '';
             timeEl.textContent = `${sourceLabel}: ${updatedAt.toLocaleTimeString('zh-CN')} / ${count}个${loadingText}`;
         }
 

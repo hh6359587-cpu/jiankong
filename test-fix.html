@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>修复验证测试</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-8">
+    <div class="max-w-6xl mx-auto">
+        <h1 class="text-3xl font-bold mb-6">币安WebSocket修复验证</h1>
+        
+        <!-- 连接状态 -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4 flex items-center">
+                    <span id="spot-status" class="w-3 h-3 rounded-full bg-gray-600 mr-2"></span>
+                    现货WebSocket (!miniTicker@arr)
+                </h2>
+                <div class="space-y-3 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">URL:</span>
+                        <span class="font-mono">wss://stream.binance.com:9443/ws/!miniTicker@arr</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">状态:</span>
+                        <span id="spot-status-text" class="text-gray-300">未连接</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">连接尝试:</span>
+                        <span id="spot-attempts" class="text-gray-300">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">数据接收:</span>
+                        <span id="spot-data-count" class="text-gray-300">0 次</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">最后数据大小:</span>
+                        <span id="spot-last-size" class="text-gray-300">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">数据统计</h2>
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="bg-gray-700 p-4 rounded-lg text-center">
+                        <div class="text-gray-400 text-sm mb-1">总代币数</div>
+                        <div id="total-count" class="text-2xl font-bold">0</div>
+                    </div>
+                    <div class="bg-blue-900/30 p-4 rounded-lg text-center">
+                        <div class="text-gray-400 text-sm mb-1">现货代币</div>
+                        <div id="spot-count" class="text-2xl font-bold">0</div>
+                    </div>
+                    <div class="bg-yellow-900/30 p-4 rounded-lg text-center">
+                        <div class="text-gray-400 text-sm mb-1">Alpha代币</div>
+                        <div id="alpha-count" class="text-2xl font-bold">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 数据预览 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">数据格式预览</h2>
+                <div id="data-preview" class="bg-gray-900 p-4 rounded-md text-xs font-mono text-gray-300 h-64 overflow-y-auto">
+                    等待数据...
+                </div>
+            </div>
+            
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-xl font-semibold mb-4">Alpha代币识别</h2>
+                <div id="alpha-detection" class="bg-gray-900 p-4 rounded-md text-xs font-mono text-gray-300 h-64 overflow-y-auto">
+                    等待Alpha代币数据...
+                </div>
+            </div>
+        </div>
+        
+        <!-- 代币列表 -->
+        <div class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">检测到的代币</h2>
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3" id="tokens-grid">
+                <div class="text-gray-500 text-center col-span-full py-8">
+                    等待代币数据...
+                </div>
+            </div>
+        </div>
+        
+        <!-- 操作按钮 -->
+        <div class="flex space-x-4">
+            <button id="start-test-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium">
+                开始测试连接
+            </button>
+            <button id="clear-data-btn" class="bg-gray-600 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-medium">
+                清空数据
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // 全局变量
+        let ws = null;
+        let tokensData = [];
+        let dataCount = 0;
+        let connectionAttempts = 0;
+        
+        // Alpha代币列表
+        const alphaTokens = [
+            'APTUSDT', 'SEIUSDT', 'SUIUSDT', 'ICPUSDT', 'NEARUSDT', 
+            'AXSUSDT', 'SANDUSDT', 'MANAUSDT', 'THETAUSDT', 'ENJUSDT', 
+            'CHZUSDT', 'AAVEUSDT', 'MKRUSDT', 'UNIUSDT', 'COMPUSDT',
+            'LINKUSDT', 'MATICUSDT', 'SOLUSDT', 'AVAXUSDT', 'DOTUSDT'
+        ];
+        
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('start-test-btn').addEventListener('click', startTest);
+            document.getElementById('clear-data-btn').addEventListener('click', clearData);
+        });
+        
+        // 开始测试
+        function startTest() {
+            const btn = document.getElementById('start-test-btn');
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                alert('WebSocket已连接，请先清空数据');
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = '连接中...';
+            
+            clearData();
+            connectWebSocket();
+        }
+        
+        // 清空数据
+        function clearData() {
+            if (ws) {
+                try {
+                    ws.close();
+                } catch (e) {
+                    console.error('关闭WebSocket时出错:', e);
+                }
+                ws = null;
+            }
+            
+            tokensData = [];
+            dataCount = 0;
+            
+            // 重置显示
+            document.getElementById('spot-status').className = 'w-3 h-3 rounded-full bg-gray-600 mr-2';
+            document.getElementById('spot-status-text').textContent = '未连接';
+            document.getElementById('spot-data-count').textContent = '0 次';
+            document.getElementById('spot-last-size').textContent = '-';
+            document.getElementById('data-preview').textContent = '等待数据...';
+            document.getElementById('alpha-detection').textContent = '等待Alpha代币数据...';
+            document.getElementById('tokens-grid').innerHTML = `
+                <div class="text-gray-500 text-center col-span-full py-8">
+                    等待代币数据...
+                </div>
+            `;
+            updateStatistics();
+            
+            const btn = document.getElementById('start-test-btn');
+            btn.disabled = false;
+            btn.textContent = '开始测试连接';
+        }
+        
+        // 连接WebSocket
+        function connectWebSocket() {
+            connectionAttempts++;
+            document.getElementById('spot-attempts').textContent = connectionAttempts;
+            
+            document.getElementById('spot-status').className = 'w-3 h-3 rounded-full bg-yellow-500 mr-2 animate-pulse';
+            document.getElementById('spot-status-text').textContent = '连接中...';
+            
+            try {
+                ws = new WebSocket('wss://stream.binance.com:9443/ws/!miniTicker@arr');
+                
+                ws.onopen = function() {
+                    console.log('WebSocket连接已打开');
+                    document.getElementById('spot-status').className = 'w-3 h-3 rounded-full bg-green-500 mr-2';
+                    document.getElementById('spot-status-text').textContent = '已连接';
+                    document.getElementById('start-test-btn').textContent = '已连接';
+                };
+                
+                ws.onmessage = function(event) {
+                    dataCount++;
+                    document.getElementById('spot-data-count').textContent = dataCount + ' 次';
+                    document.getElementById('spot-last-size').textContent = event.data.length + ' 字节';
+                    
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (Array.isArray(data)) {
+                            processData(data);
+                        } else {
+                            console.error('数据不是数组格式:', data);
+                            document.getElementById('data-preview').textContent = '错误: 数据不是数组格式\n' + JSON.stringify(data, null, 2);
+                        }
+                    } catch (e) {
+                        console.error('解析数据时出错:', e);
+                        document.getElementById('data-preview').textContent = '解析错误: ' + e.message + '\n\n原始数据: ' + event.data.substring(0, 500);
+                    }
+                };
+                
+                ws.onclose = function(event) {
+                    console.log('WebSocket连接已关闭:', event.code, event.reason);
+                    document.getElementById('spot-status').className = 'w-3 h-3 rounded-full bg-red-500 mr-2';
+                    document.getElementById('spot-status-text').textContent = '已关闭 (' + event.code + ')';
+                    document.getElementById('start-test-btn').disabled = false;
+                    document.getElementById('start-test-btn').textContent = '重新连接';
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('WebSocket错误:', error);
+                    document.getElementById('spot-status').className = 'w-3 h-3 rounded-full bg-red-500 mr-2';
+                    document.getElementById('spot-status-text').textContent = '连接错误';
+                    document.getElementById('start-test-btn').disabled = false;
+                    document.getElementById('start-test-btn').textContent = '重新连接';
+                };
+                
+            } catch (error) {
+                console.error('创建WebSocket时出错:', error);
+                document.getElementById('spot-status').className = 'w-3 h-3 rounded-full bg-red-500 mr-2';
+                document.getElementById('spot-status-text').textContent = '创建失败';
+                document.getElementById('start-test-btn').disabled = false;
+                document.getElementById('start-test-btn').textContent = '重新连接';
+            }
+        }
+        
+        // 处理数据
+        function processData(data) {
+            console.log('收到数据，长度:', data.length);
+            
+            // 显示数据格式预览（前两个数据项）
+            const preview = JSON.stringify(data.slice(0, 2), null, 2);
+            document.getElementById('data-preview').textContent = preview;
+            
+            // 处理每个代币
+            let newTokens = [];
+            let alphaDetected = [];
+            
+            data.forEach(item => {
+                try {
+                    if (!item || typeof item !== 'object' || !item.s) {
+                        return;
+                    }
+                    
+                    // 只处理USDT交易对
+                    if (!item.s.endsWith('USDT')) {
+                        return;
+                    }
+                    
+                    // 确定代币类型
+                    const tokenType = alphaTokens.includes(item.s) ? 'alpha' : 'spot';
+                    
+                    // 解析数据
+                    const closePrice = parseFloat(item.c);
+                    const openPrice = parseFloat(item.o);
+                    const priceChange = closePrice - openPrice;
+                    const priceChangePercent = (priceChange / openPrice) * 100;
+                    
+                    const token = {
+                        symbol: item.s,
+                        type: tokenType,
+                        price: closePrice,
+                        priceChangePercent: priceChangePercent,
+                        volume: parseFloat(item.q),
+                        updateTime: item.E || Date.now()
+                    };
+                    
+                    newTokens.push(token);
+                    
+                    if (tokenType === 'alpha') {
+                        alphaDetected.push({
+                            symbol: item.s,
+                            price: closePrice,
+                            change: priceChangePercent.toFixed(2) + '%'
+                        });
+                    }
+                    
+                } catch (e) {
+                    console.error('处理代币时出错:', e, item);
+                }
+            });
+            
+            // 更新代币数据
+            tokensData = newTokens;
+            
+            // 显示Alpha代币检测结果
+            if (alphaDetected.length > 0) {
+                document.getElementById('alpha-detection').textContent = 
+                    '检测到 ' + alphaDetected.length + ' 个Alpha代币:\n' + 
+                    JSON.stringify(alphaDetected, null, 2);
+            }
+            
+            // 更新统计信息
+            updateStatistics();
+            
+            // 更新代币网格
+            updateTokensGrid();
+        }
+        
+        // 更新统计信息
+        function updateStatistics() {
+            const total = tokensData.length;
+            const spot = tokensData.filter(t => t.type === 'spot').length;
+            const alpha = tokensData.filter(t => t.type === 'alpha').length;
+            
+            document.getElementById('total-count').textContent = total;
+            document.getElementById('spot-count').textContent = spot;
+            document.getElementById('alpha-count').textContent = alpha;
+        }
+        
+        // 更新代币网格
+        function updateTokensGrid() {
+            const grid = document.getElementById('tokens-grid');
+            
+            if (tokensData.length === 0) {
+                grid.innerHTML = `
+                    <div class="text-gray-500 text-center col-span-full py-8">
+                        没有检测到代币
+                    </div>
+                `;
+                return;
+            }
+            
+            // 按类型分组并取前几个
+            const spotTokens = tokensData.filter(t => t.type === 'spot').slice(0, 8);
+            const alphaTokens = tokensData.filter(t => t.type === 'alpha');
+            
+            let html = '';
+            
+            // 添加Alpha代币（如果有）
+            alphaTokens.forEach(token => {
+                const changeColor = token.priceChangePercent >= 0 ? 'text-green-400' : 'text-red-400';
+                const changeIcon = token.priceChangePercent >= 0 ? '↑' : '↓';
+                
+                html += `
+                    <div class="bg-yellow-900/20 border border-yellow-700/30 p-3 rounded-lg">
+                        <div class="font-medium text-yellow-400">${token.symbol}</div>
+                        <div class="text-sm text-gray-300">Alpha</div>
+                        <div class="text-sm font-mono mt-1">${token.price.toLocaleString()}</div>
+                        <div class="text-xs ${changeColor}">${changeIcon} ${Math.abs(token.priceChangePercent).toFixed(2)}%</div>
+                    </div>
+                `;
+            });
+            
+            // 添加现货代币
+            spotTokens.forEach(token => {
+                const changeColor = token.priceChangePercent >= 0 ? 'text-green-400' : 'text-red-400';
+                const changeIcon = token.priceChangePercent >= 0 ? '↑' : '↓';
+                
+                html += `
+                    <div class="bg-blue-900/20 border border-blue-700/30 p-3 rounded-lg">
+                        <div class="font-medium text-blue-400">${token.symbol}</div>
+                        <div class="text-sm text-gray-300">现货</div>
+                        <div class="text-sm font-mono mt-1">${token.price.toLocaleString()}</div>
+                        <div class="text-xs ${changeColor}">${changeIcon} ${Math.abs(token.priceChangePercent).toFixed(2)}%</div>
+                    </div>
+                `;
+            });
+            
+            grid.innerHTML = html;
+        }
+    </script>
+</body>
+</html>

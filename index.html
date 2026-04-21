@@ -1,0 +1,3688 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>币安代币价格监控看板</title>
+    <!-- Tailwind CSS v3 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+    <!-- 统一的 Tailwind 配置 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1E293B',
+                        secondary: '#0F172A',
+                        accent: '#3B82F6',
+                        success: '#10B981',
+                        danger: '#EF4444',
+                        warning: '#F59E0B',
+                        info: '#3B82F6',
+                        dark: '#0F172A',
+                        light: '#F1F5F9'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            },
+            darkMode: 'class'
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .scrollbar-hide::-webkit-scrollbar {
+                display: none;
+            }
+            .scrollbar-hide {
+                -ms-overflow-style: none;
+                scrollbar-width: none;
+            }
+            .grid-dashboard {
+                display: grid;
+                grid-template-columns: 300px 1fr;
+                grid-template-rows: auto 1fr;
+                height: 100vh;
+            }
+            .glass-effect {
+                background: rgba(30, 41, 59, 0.7);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.05);
+            }
+            .glass-effect-light {
+                background: rgba(241, 245, 249, 0.7);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                border: 1px solid rgba(0, 0, 0, 0.05);
+            }
+            .price-up {
+                color: #10B981;
+                transition: background-color 0.3s;
+            }
+            .price-down {
+                color: #EF4444;
+                transition: background-color 0.3s;
+            }
+            .price-up-flash {
+                background-color: rgba(16, 185, 129, 0.2);
+            }
+            .price-down-flash {
+                background-color: rgba(239, 68, 68, 0.2);
+            }
+            .mini-chart {
+                height: 40px;
+                width: 100px;
+            }
+            .token-row {
+                transition: all 0.3s ease;
+            }
+            .token-row:hover {
+                background-color: rgba(59, 130, 246, 0.1);
+            }
+            .filter-active {
+                background-color: rgba(59, 130, 246, 0.2);
+                border-color: #3B82F6;
+            }
+            .sort-indicator {
+                display: inline-block;
+                width: 0;
+                height: 0;
+                margin-left: 4px;
+            }
+            .sort-asc .sort-indicator {
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-bottom: 6px solid currentColor;
+            }
+            .sort-desc .sort-indicator {
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 6px solid currentColor;
+            }
+        }
+    </style>
+</head>
+<body class="bg-secondary text-light antialiased">
+    <div class="grid-dashboard">
+        <!-- 顶部导航栏 -->
+        <header class="col-span-2 bg-primary px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+            <div class="flex items-center space-x-4">
+                <div class="text-2xl font-bold text-white flex items-center">
+                    <i class="fa fa-line-chart text-accent mr-2"></i>
+                    <span>币安代币监控看板</span>
+                </div>
+                <div class="hidden md:flex space-x-4 text-sm">
+                    <span class="text-gray-400">最后更新: <span id="last-update-time" class="text-white">--:--:--</span></span>
+                    <span class="text-gray-400">总代币数: <span id="total-tokens" class="text-white">0</span></span>
+                    <span class="text-gray-400">筛选结果: <span id="filtered-tokens" class="text-white">0</span></span>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <button id="refresh-btn" class="bg-accent hover:bg-blue-600 text-white px-4 py-2 rounded-md flex items-center transition-colors">
+                    <i class="fa fa-refresh mr-1"></i> 刷新数据
+                </button>
+                <button id="notifications-btn" class="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded-md transition-colors relative">
+                    <i class="fa fa-bell"></i>
+                    <span id="notification-badge" class="absolute -top-1 -right-1 bg-danger text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">0</span>
+                </button>
+                <button id="theme-toggle" class="bg-gray-700 hover:bg-blue-600 text-white p-2 rounded-md transition-colors">
+                    <i class="fa fa-moon-o"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- 左侧筛选面板 -->
+        <aside class="bg-primary p-4 border-r border-gray-700 overflow-y-auto">
+            <div class="mb-6">
+                <h2 class="text-lg font-semibold mb-3 flex items-center">
+                    <i class="fa fa-filter text-accent mr-2"></i>筛选条件
+                </h2>
+                
+                <!-- 代币类型筛选 -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-400 mb-2">代币类型</label>
+                    <div class="flex flex-wrap gap-2">
+                        <button class="token-type-filter filter-active px-3 py-1 rounded-full text-sm border border-gray-600 hover:border-accent transition-colors" data-type="spot">
+                            现货
+                        </button>
+                        <button class="token-type-filter filter-active px-3 py-1 rounded-full text-sm border border-gray-600 hover:border-accent transition-colors" data-type="futures">
+                            合约
+                        </button>
+                        <button class="token-type-filter filter-active px-3 py-1 rounded-full text-sm border border-gray-600 hover:border-accent transition-colors" data-type="alpha">
+                            Alpha
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 涨跌幅筛选 -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-400 mb-2">涨跌幅范围 (%)</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">最小值</label>
+                            <input type="number" id="min-change" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm" placeholder="最小值">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">最大值</label>
+                            <input type="number" id="max-change" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm" placeholder="最大值">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 价格筛选 -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-400 mb-2">价格范围 (USDT)</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">最小值</label>
+                            <input type="number" id="min-price" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm" placeholder="最小值">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">最大值</label>
+                            <input type="number" id="max-price" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm" placeholder="最大值">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 交易量筛选 -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-400 mb-2">24h交易量 (USDT)</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">最小值</label>
+                            <input type="number" id="min-volume" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm" placeholder="最小值">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">最大值</label>
+                            <input type="number" id="max-volume" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm" placeholder="最大值">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 通知设置 -->
+                <div class="mb-6">
+                    <h2 class="text-lg font-semibold mb-3 flex items-center">
+                        <i class="fa fa-bell text-accent mr-2"></i>通知设置
+                    </h2>
+                    <div class="bg-gray-800 rounded-lg p-4">
+                        <!-- 筛选条件列表 -->
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-400 mb-2">筛选条件（满足任一即通知）</label>
+                            <div id="notification-conditions" class="space-y-2">
+                                <!-- 条件项会动态渲染 -->
+                            </div>
+                        </div>
+                        <!-- 添加条件 -->
+                        <div class="flex space-x-2 mb-3">
+                            <input type="number" id="new-condition-hours" class="flex-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="小时" min="0.1" step="0.1">
+                            <span class="text-gray-400 self-center text-sm">h涨跌</span>
+                            <input type="number" id="new-condition-threshold" class="flex-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="阈值%" min="0.1" step="0.1">
+                            <span class="text-gray-400 self-center text-sm">%</span>
+                            <button id="add-condition-btn" class="bg-accent hover:bg-blue-600 text-white px-3 py-2 rounded-md text-sm transition-colors">
+                                <i class="fa fa-plus"></i>
+                            </button>
+                        </div>
+                        <!-- 保存设置按钮 -->
+                        <button id="save-notification-settings" class="w-full bg-accent hover:bg-blue-600 text-white py-2 rounded-md transition-colors">
+                            保存设置
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 推送通知设置 -->
+                <div class="mb-6">
+                    <h2 class="text-lg font-semibold mb-3 flex items-center">
+                        <i class="fa fa-paper-plane text-accent mr-2"></i>推送通知
+                    </h2>
+                    <div class="bg-gray-800 rounded-lg p-4">
+                        <!-- 推送渠道选择 -->
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-400 mb-2">推送渠道</label>
+                            <select id="push-channel" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm">
+                                <option value="">不推送</option>
+                                <option value="serverchan">Server酱 (微信)</option>
+                                <option value="pushplus">PushPlus (微信)</option>
+                                <option value="bark">Bark (iOS)</option>
+                                <option value="dingtalk">钉钉机器人</option>
+                                <option value="wecom">企业微信机器人</option>
+                                <option value="telegram">Telegram Bot</option>
+                            </select>
+                        </div>
+                        <!-- API密钥/地址 -->
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-400 mb-2" id="push-key-label">API密钥 / 地址</label>
+                            <input type="text" id="push-key" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="请输入API密钥或推送地址">
+                        </div>
+                        <!-- 额外参数（如Telegram的ChatID） -->
+                        <div class="mb-3" id="push-extra-field" style="display:none;">
+                            <label class="block text-sm font-medium text-gray-400 mb-2" id="push-extra-label">Chat ID</label>
+                            <input type="text" id="push-extra" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="请输入Chat ID">
+                        </div>
+                        <!-- 推送开关 -->
+                        <div class="mb-3 flex items-center justify-between">
+                            <label class="text-sm font-medium text-gray-400">启用推送</label>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="push-enabled" class="sr-only peer">
+                                <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent"></div>
+                            </label>
+                        </div>
+                        <!-- 按钮组 -->
+                        <div class="flex space-x-2">
+                            <button id="save-push-settings" class="flex-1 bg-accent hover:bg-blue-600 text-white py-2 rounded-md transition-colors text-sm">
+                                保存
+                            </button>
+                            <button id="test-push" class="flex-1 bg-gray-600 hover:bg-gray-500 text-white py-2 rounded-md transition-colors text-sm">
+                                测试
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 应用筛选按钮 -->
+                <button id="apply-filters" class="w-full bg-accent hover:bg-blue-600 text-white py-2 rounded-md transition-colors">
+                    应用筛选
+                </button>
+                
+                <!-- 重置筛选按钮 -->
+                <button id="reset-filters" class="w-full mt-2 bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-md transition-colors">
+                    重置筛选
+                </button>
+            </div>
+            
+        </aside>
+
+        <!-- 主内容区域 -->
+        <main class="bg-secondary overflow-hidden flex flex-col">
+            <!-- 标签页切换 -->
+            <div class="bg-primary border-b border-gray-700 flex">
+                <button id="tab-binance" class="px-6 py-3 text-sm font-medium border-b-2 border-accent text-accent transition-colors">
+                    <i class="fa fa-line-chart mr-1"></i> 币安代币
+                </button>
+                <button id="tab-onchain" class="px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-400 hover:text-white transition-colors">
+                    <i class="fa fa-link mr-1"></i> 链上代币
+                </button>
+            </div>
+            
+            <!-- 币安代币内容 -->
+            <div id="binance-content" class="flex-1 overflow-hidden flex flex-col">
+            <!-- 排序和搜索 -->
+            <div class="bg-primary p-4 border-b border-gray-700 flex flex-wrap justify-between items-center gap-4">
+                <div class="flex items-center space-x-4">
+                    <div class="relative">
+                        <input type="text" id="search-input" placeholder="搜索代币..." class="bg-gray-800 border border-gray-700 rounded-md pl-10 pr-4 py-2 w-64 focus:outline-none focus:ring-2 focus:ring-accent">
+                        <i class="fa fa-search absolute left-3 top-3 text-gray-500"></i>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-sm text-gray-400">排序方式:</span>
+                    <select id="sort-select" class="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent">
+                        <option value="priceChangePercent-desc">涨跌幅 (高到低)</option>
+                        <option value="priceChangePercent-asc">涨跌幅 (低到高)</option>
+                        <option value="volume-desc">交易量 (高到低)</option>
+                        <option value="price-desc">价格 (高到低)</option>
+                        <option value="price-asc">价格 (低到高)</option>
+                        <option value="symbol-asc">名称 (A-Z)</option>
+                        <option value="symbol-desc">名称 (Z-A)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- 代币表格 -->
+            <div class="flex-1 overflow-auto">
+                <table class="w-full text-left">
+                    <thead class="bg-gray-800 sticky top-0">
+                        <tr>
+                            <th class="px-4 py-3 text-sm font-medium text-gray-400 sortable-header" data-sort="symbol">
+                                代币名称 <span class="sort-indicator"></span>
+                            </th>
+                            <th class="px-4 py-3 text-sm font-medium text-gray-400 sortable-header" data-sort="type">
+                                类型 <span class="sort-indicator"></span>
+                            </th>
+                            <th class="px-4 py-3 text-sm font-medium text-gray-400 sortable-header" data-sort="price">
+                                价格 (USDT) <span class="sort-indicator"></span>
+                            </th>
+                            <th class="px-4 py-3 text-sm font-medium text-gray-400 sortable-header" data-sort="priceChangePercent">
+                                24h涨跌幅 (%) <span class="sort-indicator"></span>
+                            </th>
+                            <th class="px-4 py-3 text-sm font-medium text-gray-400 sortable-header" data-sort="volume">
+                                24h交易量 <span class="sort-indicator"></span>
+                            </th>
+                            <th class="px-4 py-3 text-sm font-medium text-gray-400">
+                                价格走势
+                            </th>
+                            <th class="px-4 py-3 text-sm font-medium text-gray-400">
+                                操作
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody id="tokens-table-body">
+                        <!-- 代币数据将通过JavaScript动态填充 -->
+                        <tr>
+                            <td colspan="7" class="px-4 py-8 text-center text-gray-500">
+                                <div class="animate-pulse flex flex-col items-center">
+                                    <i class="fa fa-spinner fa-spin text-3xl mb-2"></i>
+                                    <p>正在加载数据...</p>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- 分页 -->
+            <div class="bg-primary p-4 border-t border-gray-700 flex justify-between items-center">
+                <div class="text-sm text-gray-400">
+                    显示 <span id="showing-range">0-0</span> 条，共 <span id="total-pages">0</span> 页
+                </div>
+                <div class="flex space-x-2">
+                    <button id="prev-page" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                        <i class="fa fa-chevron-left"></i>
+                    </button>
+                    <div class="flex space-x-1">
+                        <button class="page-btn bg-accent text-white px-3 py-1 rounded-md">1</button>
+                        <!-- 页码按钮将通过JavaScript动态添加 -->
+                    </div>
+                    <button id="next-page" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                        <i class="fa fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+            </div><!-- binance-content 结束 -->
+            
+            <!-- 链上代币内容 -->
+            <div id="onchain-content" class="flex-1 overflow-hidden flex flex-col" style="display:none;">
+                <!-- 搜索和刷新 -->
+                <div class="bg-primary p-4 border-b border-gray-700 flex flex-wrap justify-between items-center gap-4">
+                    <div class="flex items-center space-x-4">
+                        <div class="relative">
+                            <input type="text" id="onchain-search-input" placeholder="搜索链上代币..." class="bg-gray-800 border border-gray-700 rounded-md pl-10 pr-4 py-2 w-64 focus:outline-none focus:ring-2 focus:ring-accent">
+                            <i class="fa fa-search absolute left-3 top-3 text-gray-500"></i>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-sm text-gray-400" id="onchain-update-time">最后更新: --</span>
+                        <button id="refresh-onchain" class="bg-accent hover:bg-blue-600 text-white px-4 py-2 rounded-md flex items-center transition-colors">
+                            <i class="fa fa-refresh mr-1"></i> 刷新
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 链上代币表格 -->
+                <div class="flex-1 overflow-auto relative">
+                    <div id="onchain-loading" style="display:none;" class="absolute inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-10">
+                        <div class="text-center">
+                            <i class="fa fa-spinner fa-spin text-4xl text-accent mb-3"></i>
+                            <p class="text-gray-300 text-sm">正在从DEX Screener获取代币数据...</p>
+                            <p class="text-gray-500 text-xs mt-1" id="onchain-loading-status">Phase 1: 发现代币地址</p>
+                        </div>
+                    </div>
+                    <table class="w-full text-left">
+                        <thead class="bg-gray-800 sticky top-0">
+                            <tr>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">代币</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">链</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">DEX</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">价格 (USD)</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">24h涨跌幅</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">市值</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">流动性</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">24h成交额</th>
+                                <th class="px-4 py-3 text-sm font-medium text-gray-400">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="onchain-table-body">
+                            <tr>
+                                <td colspan="9" class="px-4 py-8 text-center text-gray-500">
+                                    <div class="animate-pulse flex flex-col items-center">
+                                        <i class="fa fa-spinner fa-spin text-3xl mb-2"></i>
+                                        <p>正在加载链上代币数据...</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div><!-- onchain-content 结束 -->
+        </main>
+        
+        <!-- 底部价格显示栏 -->
+        <div class="col-span-2 bg-primary border-t border-gray-700 px-6 py-3">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-8">
+                    <div class="text-center">
+                        <div class="text-sm text-gray-400 mb-1">BTC</div>
+                        <div id="btc-price" class="font-mono font-medium">--,---.---</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-400 mb-1">ETH</div>
+                        <div id="eth-price" class="font-mono font-medium">--,---.---</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-400 mb-1">SOL</div>
+                        <div id="sol-price" class="font-mono font-medium">--,---.---</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-400 mb-1">BNB</div>
+                        <div id="bnb-price" class="font-mono font-medium">--,---.---</div>
+                    </div>
+                </div>
+                <div class="text-sm text-gray-400">
+                    实时价格更新中...
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 代币详情模态框 -->
+    <div id="token-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center hidden">
+        <div class="bg-primary rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+                <h2 class="text-xl font-bold flex items-center">
+                    <i class="fa fa-info-circle text-accent mr-2"></i>
+                    <span id="modal-token-name">代币详情</span>
+                </h2>
+                <button id="close-modal" class="text-gray-400 hover:text-white">
+                    <i class="fa fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- 左侧信息 -->
+                    <div>
+                        <div class="mb-6">
+                            <h3 class="text-lg font-semibold mb-3">基本信息</h3>
+                            <div class="bg-gray-800 rounded-lg p-4 space-y-3">
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">代币符号:</span>
+                                    <span id="modal-symbol" class="font-medium">BTCUSDT</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">代币类型:</span>
+                                    <span id="modal-type" class="font-medium">现货</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">当前价格:</span>
+                                    <span id="modal-price" class="font-medium">42,500.00 USDT</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">24h涨跌幅:</span>
+                                    <span id="modal-price-change" class="font-medium text-success">+5.23%</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">24h交易量:</span>
+                                    <span id="modal-volume" class="font-medium">12,500,750 USDT</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">24h最高价:</span>
+                                    <span id="modal-high" class="font-medium">43,200.00 USDT</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">24h最低价:</span>
+                                    <span id="modal-low" class="font-medium">41,000.25 USDT</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">24h开盘价:</span>
+                                    <span id="modal-open" class="font-medium">40,400.00 USDT</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-400">最后更新:</span>
+                                    <span id="modal-update-time" class="font-medium">2023-07-21 15:30:45</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 风险指标 -->
+                        <div>
+                            <h3 class="text-lg font-semibold mb-3">风险指标</h3>
+                            <div class="bg-gray-800 rounded-lg p-4 space-y-4">
+                                <div>
+                                    <div class="flex justify-between mb-1">
+                                        <span class="text-gray-400 text-sm">波动性</span>
+                                        <span id="volatility-value" class="text-sm">中等</span>
+                                    </div>
+                                    <div class="w-full bg-gray-700 rounded-full h-2">
+                                        <div id="volatility-bar" class="bg-warning h-2 rounded-full" style="width: 60%"></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="flex justify-between mb-1">
+                                        <span class="text-gray-400 text-sm">交易量变化</span>
+                                        <span id="volume-change-value" class="text-sm">+25%</span>
+                                    </div>
+                                    <div class="w-full bg-gray-700 rounded-full h-2">
+                                        <div id="volume-change-bar" class="bg-success h-2 rounded-full" style="width: 75%"></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="flex justify-between mb-1">
+                                        <span class="text-gray-400 text-sm">市场情绪</span>
+                                        <span id="sentiment-value" class="text-sm">看涨</span>
+                                    </div>
+                                    <div class="w-full bg-gray-700 rounded-full h-2">
+                                        <div id="sentiment-bar" class="bg-success h-2 rounded-full" style="width: 80%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 右侧图表 -->
+                    <div>
+                        <h3 class="text-lg font-semibold mb-3">价格走势</h3>
+                        <div class="bg-gray-800 rounded-lg p-4">
+                            <div class="flex space-x-2 mb-4">
+                                <button class="time-range-btn bg-accent text-white px-3 py-1 rounded-md text-sm" data-range="1h">1小时</button>
+                                <button class="time-range-btn bg-gray-700 text-white px-3 py-1 rounded-md text-sm" data-range="24h">24小时</button>
+                                <button class="time-range-btn bg-gray-700 text-white px-3 py-1 rounded-md text-sm" data-range="7d">7天</button>
+                                <button class="time-range-btn bg-gray-700 text-white px-3 py-1 rounded-md text-sm" data-range="30d">30天</button>
+                            </div>
+                            <div class="h-64">
+                                <canvas id="detail-chart"></canvas>
+                            </div>
+                        </div>
+                        
+                        <!-- 交易建议 -->
+                        <div class="mt-6">
+                            <h3 class="text-lg font-semibold mb-3">AI交易建议</h3>
+                            <div id="ai-analysis" class="bg-gray-800 rounded-lg p-4">
+                                <div class="flex items-start mb-3">
+                                    <div class="bg-accent rounded-full p-2 mr-3">
+                                        <i class="fa fa-lightbulb-o text-white"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-medium mb-1">市场分析</h4>
+                                        <p id="ai-market-analysis" class="text-sm text-gray-300">
+                                            基于近期价格走势和交易量分析，该代币显示出强劲的上升趋势。过去24小时内价格上涨了5.23%，交易量较前一周期增加了25%，表明市场对该代币的兴趣正在增加。
+                                        </p>
+                                    </div>
+                                </div>
+                                <div class="flex items-start">
+                                    <div class="bg-warning rounded-full p-2 mr-3">
+                                        <i class="fa fa-exclamation-triangle text-white"></i>
+                                    </div>
+                                    <div>
+                                        <h4 class="font-medium mb-1">风险提示</h4>
+                                        <p id="ai-risk-warning" class="text-sm text-gray-300">
+                                            尽管短期趋势看好，但加密货币市场波动性较大，建议设置止损位以控制风险。同时关注大盘走势和相关新闻，可能会对该代币价格产生重大影响。
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="p-4 border-t border-gray-700 flex justify-end">
+                <button id="close-modal-btn" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-md transition-colors">
+                    关闭
+                </button>
+            </div>
+        </main>
+    </div>
+    
+    <script>
+        // 全局变量
+        let tokensData = [];
+        let filteredTokens = [];
+        let currentPage = 1;
+        const itemsPerPage = 20;
+        let selectedTokenTypes = ['spot', 'futures', 'alpha'];
+        let detailChart = null;
+        let isDarkMode = true;
+        let lastUpdateTime = new Date();
+        
+        // 通知相关变量
+        let notificationPermission = 'default';
+        let notificationConditions = [
+            { hours: 1, threshold: 30 }
+        ]; // 多条件数组，满足任一即通知
+        let lastNotifications = {}; // 记录最近的通知，避免重复通知
+        let notificationsHistory = []; // 通知历史记录
+        let unreadNotifications = 0; // 未读通知数
+        
+        // 推送通知相关变量
+        let pushSettings = {
+            enabled: false,
+            channel: '',
+            key: '',
+            extra: ''
+        };
+        
+        // 链上代币相关变量
+        let onchainTokens = [];
+        let onchainFilteredTokens = [];
+        let onchainRefreshInterval = null;
+        let binanceAllSymbols = new Set(); // 币安所有已上架代币symbol
+        let onchainLastNotifications = {}; // 链上代币通知冷却记录 key: chainId-address
+        let onchainNotificationConditions = [
+            { period: 'm5', label: '5m', threshold: 10 },
+            { period: 'h1', label: '1h', threshold: 20 }
+        ];
+        
+        // WebSocket连接
+        let spotWebSocket = null;
+        let futuresWebSocket = null;
+        let isConnected = false;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        let reconnectTimeout = null;
+        
+        // 代币类型映射
+        const tokenTypeMap = {
+            'spot': '现货',
+            'futures': '合约',
+            'alpha': 'Alpha'
+        };
+        
+        // 调试信息
+        console.log('=== 币安监控看板初始化 ===');
+        console.log('当前时间:', new Date().toLocaleString());
+        console.log('浏览器:', navigator.userAgent);
+        
+        // 链名称映射
+        const chainNameMap = {
+            'solana': 'SOL',
+            'ethereum': 'ETH',
+            'bsc': 'BSC',
+            'base': 'Base',
+            'avalanche': 'AVAX',
+            'polygon': 'Polygon',
+            'arbitrum': 'Arb',
+            'optimism': 'OP',
+            'fantom': 'FTM',
+            'linea': 'Linea',
+            'blast': 'Blast',
+            'zksync': 'zkSync'
+        };
+        
+        // 格式化数字（市值、流动性、成交额）
+        function formatLargeNumber(num) {
+            if (!num && num !== 0) return '--';
+            if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+            if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+            if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+            return num.toFixed(2);
+        }
+        
+        // 获取链上代币数据
+        // 从币安API获取所有已上架代币列表
+        async function fetchBinanceAllSymbols() {
+            try {
+                // 获取现货交易对
+                const spotRes = await fetch('https://api.binance.com/api/v3/exchangeInfo');
+                const spotData = await spotRes.json();
+                if (spotData && spotData.symbols) {
+                    spotData.symbols.forEach(s => {
+                        const base = s.baseAsset;
+                        if (base && base !== 'USDT' && base !== 'BUSD' && base !== 'USDC') {
+                            binanceAllSymbols.add(base.toUpperCase());
+                        }
+                    });
+                }
+                
+                // 获取合约交易对
+                try {
+                    const futuresRes = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
+                    const futuresData = await futuresRes.json();
+                    if (futuresData && futuresData.symbols) {
+                        futuresData.symbols.forEach(s => {
+                            const base = s.baseAsset;
+                            if (base && base !== 'USDT' && base !== 'BUSD') {
+                                binanceAllSymbols.add(base.toUpperCase());
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.warn('获取合约交易对失败:', e);
+                }
+                
+                console.log('币安已上架代币（API获取）:', binanceAllSymbols.size, '个');
+            } catch (error) {
+                console.error('获取币安交易对列表失败:', error);
+            }
+        }
+        
+        async function fetchOnchainTokens() {
+            try {
+                const geckoChainMap = { 'solana': 'solana', 'ethereum': 'eth', 'bsc': 'bsc', 'base': 'base' };
+                const allowedChains = new Set(['solana', 'ethereum', 'bsc', 'base']);
+                const skipSymbols = new Set(['USDT','USDC','DAI','BUSD','FRAX','TUSD','USDD','USDP','LUSD','FDUSD','PYUSD','WETH','WSOL','WBNB','WBTC','CBETH','RETH','WEETH','USDS','AUSD','EURC','CBBTC','SOL','ETH','BNB']);
+                
+                const geckoTokens = {};
+                const geckoSeenKeys = new Set();
+                
+                function processGeckoPool(pool, chainId) {
+                    const attrs = pool.attributes || {};
+                    const rels = pool.relationships || {};
+                    const baseTokenRef = rels.base_token && rels.base_token.data;
+                    if (!baseTokenRef || !baseTokenRef.id) return;
+                    
+                    const idParts = baseTokenRef.id.split('_');
+                    if (idParts.length < 2) return;
+                    const tokenAddress = idParts.slice(1).join('_');
+                    
+                    const poolSymbol = attrs.name ? attrs.name.split('/')[0].trim() : '';
+                    if (skipSymbols.has(poolSymbol.toUpperCase())) return;
+                    
+                    const key = `${chainId}-${tokenAddress}`;
+                    if (geckoSeenKeys.has(key)) return;
+                    geckoSeenKeys.add(key);
+                    
+                    const fdv = parseFloat(attrs.fdv_usd) || 0;
+                    const mcap = parseFloat(attrs.market_cap_usd) || 0;
+                    const dexId = (rels.dex && rels.dex.data && rels.dex.data.id) || '';
+                    
+                    geckoTokens[key] = {
+                        chainId,
+                        pairAddress: pool.id || attrs.address,
+                        dexId,
+                        baseToken: { address: tokenAddress, name: poolSymbol, symbol: poolSymbol },
+                        priceUsd: parseFloat(attrs.base_token_price_usd) || 0,
+                        priceChange: {
+                            h24: parseFloat(attrs.price_change_percentage && attrs.price_change_percentage.h24) || 0,
+                            h6: parseFloat(attrs.price_change_percentage && attrs.price_change_percentage.h6) || 0,
+                            h1: parseFloat(attrs.price_change_percentage && attrs.price_change_percentage.h1) || 0
+                        },
+                        volume: { h24: parseFloat(attrs.volume_usd && attrs.volume_usd.h24) || 0 },
+                        liquidity: { usd: parseFloat(attrs.reserve_in_usd) || 0 },
+                        marketCap: mcap > 0 ? mcap : fdv,
+                        fdv,
+                        url: `https://dexscreener.com/${chainId}/${attrs.address}`,
+                        source: 'geckoterminal'
+                    };
+                }
+                
+                function delay(ms) {
+                    return new Promise(resolve => setTimeout(resolve, ms));
+                }
+                
+                const loadingEl = document.getElementById('onchain-loading');
+                const loadingStatus = document.getElementById('onchain-loading-status');
+                if (loadingEl) loadingEl.style.display = 'flex';
+                if (loadingStatus) loadingStatus.textContent = 'Phase 1: GeckoTerminal发现代币地址...';
+                
+                console.log('[链上代币] Phase 1: GeckoTerminal发现代币地址...');
+                
+                const geckoPromises = [];
+                const VOL_PAGES = 15;
+                const TX_PAGES = 10;
+                const NEW_PAGES = 3;
+                
+                for (const [chainId, geckoChain] of Object.entries(geckoChainMap)) {
+                    geckoPromises.push(
+                        fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/trending_pools`)
+                            .then(res => res.json())
+                            .then(data => { if (data && data.data && Array.isArray(data.data)) data.data.forEach(p => processGeckoPool(p, chainId)); })
+                            .catch(err => console.error(`GeckoTerminal trending ${geckoChain}失败:`, err))
+                    );
+                    
+                    for (let page = 1; page <= VOL_PAGES; page++) {
+                        geckoPromises.push(
+                            delay((page - 1) * 250).then(() =>
+                                fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/pools?page=${page}&sort=h24_volume_usd_desc`)
+                                    .then(res => res.json())
+                                    .then(data => { if (data && data.data && Array.isArray(data.data)) data.data.forEach(p => processGeckoPool(p, chainId)); })
+                                    .catch(err => console.error(`GeckoTerminal ${geckoChain} vol p${page}失败:`, err))
+                            )
+                        );
+                    }
+                    
+                    for (let page = 1; page <= TX_PAGES; page++) {
+                        geckoPromises.push(
+                            delay(VOL_PAGES * 250 + (page - 1) * 250).then(() =>
+                                fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/pools?page=${page}&sort=h24_tx_count_desc`)
+                                    .then(res => res.json())
+                                    .then(data => { if (data && data.data && Array.isArray(data.data)) data.data.forEach(p => processGeckoPool(p, chainId)); })
+                                    .catch(err => console.error(`GeckoTerminal ${geckoChain} tx p${page}失败:`, err))
+                            )
+                        );
+                    }
+                    
+                    for (let page = 1; page <= NEW_PAGES; page++) {
+                        geckoPromises.push(
+                            fetch(`https://api.geckoterminal.com/api/v2/networks/${geckoChain}/new_pools?page=${page}`)
+                                .then(res => res.json())
+                                .then(data => { if (data && data.data && Array.isArray(data.data)) data.data.forEach(p => processGeckoPool(p, chainId)); })
+                                .catch(err => console.error(`GeckoTerminal new ${geckoChain} p${page}失败:`, err))
+                        );
+                    }
+                }
+                
+                await Promise.all(geckoPromises);
+                console.log('[链上代币] GeckoTerminal发现', Object.keys(geckoTokens).length, '个代币');
+                
+                console.log('[链上代币] Phase 2: DEX Screener批量获取详细数据...');
+                if (loadingStatus) loadingStatus.textContent = `Phase 2: DEX Screener获取详细数据 (${Object.keys(geckoTokens).length}个代币)...`;
+                
+                const chainAddresses = {};
+                for (const token of Object.values(geckoTokens)) {
+                    if (!chainAddresses[token.chainId]) chainAddresses[token.chainId] = [];
+                    chainAddresses[token.chainId].push(token.baseToken.address);
+                }
+                
+                const dexScreenerMap = {};
+                const dexBatchPromises = [];
+                
+                for (const [chainId, addrs] of Object.entries(chainAddresses)) {
+                    if (!allowedChains.has(chainId)) continue;
+                    for (let i = 0; i < addrs.length; i += 30) {
+                        const batch = addrs.slice(i, i + 30);
+                        const batchIdx = dexBatchPromises.length;
+                        dexBatchPromises.push(
+                            delay(batchIdx * 400).then(() =>
+                                fetch(`https://api.dexscreener.com/tokens/v1/${chainId}/${batch.join(',')}`)
+                                    .then(res => res.json())
+                                    .then(pairs => {
+                                        if (!Array.isArray(pairs)) return;
+                                        pairs.forEach(pair => {
+                                            if (!pair || !pair.baseToken || !pair.baseToken.address || !allowedChains.has(pair.chainId)) return;
+                                            const key = `${pair.chainId}-${pair.baseToken.address}`;
+                                            if (!dexScreenerMap[key]) {
+                                                dexScreenerMap[key] = pair;
+                                            } else {
+                                                const existingLiq = (dexScreenerMap[key].liquidity && dexScreenerMap[key].liquidity.usd) || 0;
+                                                const newLiq = (pair.liquidity && pair.liquidity.usd) || 0;
+                                                if (newLiq > existingLiq) dexScreenerMap[key] = pair;
+                                            }
+                                        });
+                                    })
+                                    .catch(() => {})
+                            )
+                        );
+                    }
+                }
+                
+                await Promise.all(dexBatchPromises);
+                console.log('[链上代币] DEX Screener获取', Object.keys(dexScreenerMap).length, '个代币详细数据');
+                
+                console.log('[链上代币] Phase 3: DEX Screener trending/boosts补充...');
+                if (loadingStatus) loadingStatus.textContent = 'Phase 3: DEX Screener trending/boosts补充...';
+                
+                const dexExtraPairs = [];
+                const dexExtraSeen = new Set();
+                function addDexExtraPair(pair) {
+                    if (pair && pair.baseToken && pair.baseToken.address && allowedChains.has(pair.chainId)) {
+                        const key = `${pair.chainId}-${pair.baseToken.address}`;
+                        if (!dexExtraSeen.has(key)) {
+                            dexExtraSeen.add(key);
+                            dexExtraPairs.push(pair);
+                        }
+                    }
+                }
+                
+                try {
+                    const trendingRes = await fetch('https://api.dexscreener.com/metas/trending/v1');
+                    const trendingData = await trendingRes.json();
+                    if (trendingData && Array.isArray(trendingData)) {
+                        const slugPromises = trendingData.map(cat =>
+                            fetch(`https://api.dexscreener.com/metas/meta/v1/${cat.slug}`)
+                                .then(res => res.json())
+                                .then(data => { (data.pairs || []).forEach(addDexExtraPair); })
+                                .catch(() => {})
+                        );
+                        await Promise.all(slugPromises);
+                    }
+                } catch (err) {
+                    console.error('获取trending数据失败:', err);
+                }
+                
+                try {
+                    const [boostsLatest, boostsTop] = await Promise.all([
+                        fetch('https://api.dexscreener.com/token-boosts/latest/v1').catch(() => null),
+                        fetch('https://api.dexscreener.com/token-boosts/top/v1').catch(() => null)
+                    ]);
+                    const boostAddrs = {};
+                    for (const res of [boostsLatest, boostsTop]) {
+                        if (!res || !res.ok) continue;
+                        const data = await res.json();
+                        (Array.isArray(data) ? data : [data]).forEach(item => {
+                            if (item && item.chainId && item.tokenAddress && allowedChains.has(item.chainId)) {
+                                if (!boostAddrs[item.chainId]) boostAddrs[item.chainId] = new Set();
+                                boostAddrs[item.chainId].add(item.tokenAddress);
+                            }
+                        });
+                    }
+                    const boostPromises = [];
+                    for (const [chainId, addrs] of Object.entries(boostAddrs)) {
+                        const arr = Array.from(addrs);
+                        for (let i = 0; i < arr.length; i += 30) {
+                            boostPromises.push(
+                                fetch(`https://api.dexscreener.com/tokens/v1/${chainId}/${arr.slice(i, i + 30).join(',')}`)
+                                    .then(res => res.json())
+                                    .then(pairs => { if (Array.isArray(pairs)) pairs.forEach(addDexExtraPair); })
+                                    .catch(() => {})
+                            );
+                        }
+                    }
+                    await Promise.all(boostPromises);
+                } catch (err) {
+                    console.error('获取boost数据失败:', err);
+                }
+                
+                const extraSlugs = ['meme', 'ai', 'defi', 'gaming', 'solana-ecosystem', 'base-ecosystem', 'bsc-ecosystem', 'ethereum-ecosystem'];
+                await Promise.all(extraSlugs.map(slug =>
+                    fetch(`https://api.dexscreener.com/metas/meta/v1/${slug}`)
+                        .then(res => res.json())
+                        .then(data => { (data.pairs || []).forEach(addDexExtraPair); })
+                        .catch(() => {})
+                ));
+                
+                console.log('[链上代币] DEX Screener补充获取', dexExtraPairs.length, '个代币对');
+                
+                console.log('[链上代币] Phase 4: 合并数据...');
+                if (loadingStatus) loadingStatus.textContent = 'Phase 4: 合并数据...';
+                
+                const tokenMap = {};
+                const seenKeys = new Set();
+                
+                for (const [key, geckoToken] of Object.entries(geckoTokens)) {
+                    if (dexScreenerMap[key]) {
+                        const dex = dexScreenerMap[key];
+                        tokenMap[key] = {
+                            chainId: dex.chainId || geckoToken.chainId,
+                            pairAddress: dex.pairAddress || geckoToken.pairAddress,
+                            dexId: dex.dexId || geckoToken.dexId,
+                            baseToken: dex.baseToken || geckoToken.baseToken,
+                            quoteToken: dex.quoteToken || geckoToken.quoteToken,
+                            priceUsd: dex.priceUsd || geckoToken.priceUsd,
+                            priceChange: dex.priceChange || geckoToken.priceChange,
+                            volume: dex.volume || geckoToken.volume,
+                            liquidity: (dex.liquidity && dex.liquidity.usd) ? dex.liquidity : geckoToken.liquidity,
+                            marketCap: dex.marketCap || dex.fdv || geckoToken.marketCap,
+                            fdv: dex.fdv || geckoToken.fdv,
+                            url: dex.url || geckoToken.url,
+                            info: dex.info || null,
+                            source: 'dexscreener'
+                        };
+                    } else {
+                        tokenMap[key] = geckoToken;
+                    }
+                    seenKeys.add(key);
+                }
+                
+                for (const pair of dexExtraPairs) {
+                    const addr = pair.baseToken && pair.baseToken.address;
+                    if (!addr) continue;
+                    const key = `${pair.chainId}-${addr}`;
+                    if (!seenKeys.has(key)) {
+                        seenKeys.add(key);
+                        tokenMap[key] = pair;
+                    }
+                }
+                
+                console.log('[链上代币] 合并后共', Object.keys(tokenMap).length, '个代币');
+                
+                console.log('[链上代币] Phase 5: 筛选...');
+                if (loadingStatus) loadingStatus.textContent = 'Phase 5: 筛选代币...';
+                
+                const binanceSymbols = new Set(binanceAllSymbols);
+                tokensData.forEach(token => {
+                    const symbol = token.symbol.replace('USDT', '').replace('BUSD', '').replace('USDC', '');
+                    if (symbol) binanceSymbols.add(symbol.toUpperCase());
+                });
+                console.log('[链上代币] 币安已上架代币:', binanceSymbols.size, '个');
+                
+                onchainTokens = Object.values(tokenMap).filter(token => {
+                    const symbol = (token.baseToken && token.baseToken.symbol || '').toUpperCase();
+                    const marketCap = token.marketCap || token.fdv || 0;
+                    const liquidity = (token.liquidity && token.liquidity.usd) || 0;
+                    const volume24h = (token.volume && token.volume.h24) || 0;
+                    
+                    if (binanceSymbols.has(symbol)) return false;
+                    if (skipSymbols.has(symbol)) return false;
+                    
+                    return marketCap >= 50000000 && liquidity >= 2000000 && volume24h >= 1000000;
+                });
+                
+                onchainTokens.sort((a, b) => {
+                    const mcA = a.marketCap || a.fdv || 0;
+                    const mcB = b.marketCap || b.fdv || 0;
+                    return mcB - mcA;
+                });
+                
+                const symbolSeen = new Set();
+                const dedupedTokens = [];
+                for (const token of onchainTokens) {
+                    const key = `${(token.baseToken && token.baseToken.symbol || '').toUpperCase()}-${token.chainId}`;
+                    if (!symbolSeen.has(key)) {
+                        symbolSeen.add(key);
+                        dedupedTokens.push(token);
+                    }
+                }
+                onchainTokens = dedupedTokens;
+                
+                onchainFilteredTokens = [...onchainTokens];
+                renderOnchainTable();
+                
+                if (loadingEl) loadingEl.style.display = 'none';
+                
+                const timeEl = document.getElementById('onchain-update-time');
+                if (timeEl) {
+                    timeEl.textContent = '最后更新: ' + new Date().toLocaleString('zh-CN');
+                }
+                
+                console.log('[链上代币] 筛选去重完成:', onchainTokens.length, '个代币');
+            } catch (error) {
+                console.error('获取链上代币数据失败:', error);
+                const loadingEl = document.getElementById('onchain-loading');
+                if (loadingEl) loadingEl.style.display = 'none';
+                const tableBody = document.getElementById('onchain-table-body');
+                if (tableBody) {
+                    tableBody.innerHTML = `<tr><td colspan="9" class="px-4 py-8 text-center text-gray-500"><i class="fa fa-exclamation-circle text-3xl mb-2"></i><p>数据加载失败，请稍后重试</p></td></tr>`;
+                }
+            }
+        }
+        
+        // 重新过滤链上代币（币安数据加载后调用）
+        function refilterOnchainTokens() {
+            if (onchainTokens.length === 0) return;
+            
+            const binanceSymbols = new Set(binanceAllSymbols);
+            
+            tokensData.forEach(token => {
+                const symbol = token.symbol.replace('USDT', '').replace('BUSD', '').replace('USDC', '');
+                if (symbol) binanceSymbols.add(symbol.toUpperCase());
+            });
+            
+            const before = onchainTokens.length;
+            onchainTokens = onchainTokens.filter(token => !binanceSymbols.has(token.baseToken.symbol.toUpperCase()));
+            const removed = before - onchainTokens.length;
+            
+            if (removed > 0) {
+                console.log(`重新过滤链上代币：移除${removed}个已上币安代币，剩余${onchainTokens.length}个`);
+                onchainFilteredTokens = [...onchainTokens];
+                renderOnchainTable();
+            }
+        }
+        
+        // 渲染链上代币表格
+        function renderOnchainTable() {
+            const tableBody = document.getElementById('onchain-table-body');
+            if (!tableBody) return;
+            
+            const searchInput = document.getElementById('onchain-search-input');
+            const searchQuery = searchInput ? searchInput.value.toLowerCase().trim() : '';
+            
+            let displayTokens = onchainTokens;
+            
+            if (searchQuery) {
+                displayTokens = displayTokens.filter(token => 
+                    token.baseToken.symbol.toLowerCase().includes(searchQuery) ||
+                    token.baseToken.name.toLowerCase().includes(searchQuery) ||
+                    token.chainId.toLowerCase().includes(searchQuery)
+                );
+            }
+            
+            onchainFilteredTokens = displayTokens;
+            
+            if (displayTokens.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="9" class="px-4 py-8 text-center text-gray-500"><i class="fa fa-inbox text-3xl mb-2"></i><p>暂无符合条件的链上代币</p></td></tr>`;
+                return;
+            }
+            
+            tableBody.innerHTML = displayTokens.map(token => {
+                const price = token.priceUsd ? parseFloat(token.priceUsd) : 0;
+                const priceChange = (token.priceChange && token.priceChange.h24) || 0;
+                const marketCap = token.marketCap || token.fdv || 0;
+                const liquidity = (token.liquidity && token.liquidity.usd) || 0;
+                const volume24h = (token.volume && token.volume.h24) || 0;
+                const chain = chainNameMap[token.chainId] || token.chainId;
+                const isUp = priceChange >= 0;
+                const imageUrl = token.info && token.info.imageUrl;
+                
+                return `
+                    <tr class="border-b border-gray-700 hover:bg-gray-800 transition-colors">
+                        <td class="px-4 py-3">
+                            <div class="flex items-center">
+                                ${imageUrl ? `<img src="${imageUrl}" class="w-6 h-6 rounded-full mr-2" onerror="this.style.display='none'">` : ''}
+                                <div>
+                                    <div class="font-medium text-white">${token.baseToken.symbol}</div>
+                                    <div class="text-xs text-gray-500">${token.baseToken.name}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-300">${chain}</td>
+                        <td class="px-4 py-3 text-sm text-gray-400">${token.dexId}</td>
+                        <td class="px-4 py-3 font-mono text-sm">$${price < 0.01 ? price.toExponential(2) : price < 1 ? price.toFixed(6) : price.toFixed(2)}</td>
+                        <td class="px-4 py-3 text-sm font-medium ${isUp ? 'text-success' : 'text-danger'}">
+                            ${isUp ? '+' : ''}${priceChange.toFixed(2)}%
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-300">$${formatLargeNumber(marketCap)}</td>
+                        <td class="px-4 py-3 text-sm text-gray-300">$${formatLargeNumber(liquidity)}</td>
+                        <td class="px-4 py-3 text-sm text-gray-300">$${formatLargeNumber(volume24h)}</td>
+                        <td class="px-4 py-3">
+                            <a href="${token.url}" target="_blank" class="text-accent hover:text-blue-400 text-sm">
+                                <i class="fa fa-external-link"></i> 查看
+                            </a>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        // 初始化函数
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化图表
+            initCharts();
+            
+            // 设置事件监听器
+            setupEventListeners();
+            
+            // 请求通知权限
+            requestNotificationPermission();
+            
+            // 加载通知历史
+            loadNotificationsHistory();
+            
+            // 加载通知设置
+            loadNotificationSettings();
+            
+            // 加载推送设置
+            loadPushSettings();
+            
+            // 加载链上代币数据（先获取币安代币列表）
+            fetchBinanceAllSymbols().then(() => {
+                fetchOnchainTokens();
+            });
+            
+            // 设置链上代币自动刷新（5分钟）
+            onchainRefreshInterval = setInterval(fetchOnchainTokens, 5 * 60 * 1000);
+            
+            // 连接到币安WebSocket
+            connectToBinanceWS();
+            
+            // 更新最后更新时间
+            updateLastUpdateTime();
+            
+            // 添加连接超时处理
+            setTimeout(() => {
+                if (tokensData.length === 0) {
+                    console.warn('WebSocket连接超时，无法加载数据');
+                    updateConnectionStatus('数据加载失败，请检查网络连接或稍后重试', 'error');
+                    showLoadingError();
+                }
+            }, 10000);
+        });
+        
+        // 请求通知权限
+        function requestNotificationPermission() {
+            if ('Notification' in window) {
+                Notification.requestPermission().then(permission => {
+                    notificationPermission = permission;
+                    console.log('通知权限状态:', permission);
+                    if (permission !== 'granted') {
+                        console.warn('通知权限未授予，将无法发送价格波动通知');
+                    }
+                });
+            } else {
+                console.warn('浏览器不支持通知功能');
+            }
+        }
+        
+        // 发送通知
+        function sendNotification(token, priceChangePercent, condition) {
+            if (notificationPermission !== 'granted') {
+                return;
+            }
+            
+            // 检查是否在最近5分钟内已经发送过该代币的通知
+            const now = new Date().getTime();
+            const lastNotificationTime = lastNotifications[token.symbol];
+            if (lastNotificationTime && (now - lastNotificationTime) < 5 * 60 * 1000) {
+                return; // 5分钟内不重复通知
+            }
+            
+            const isUp = priceChangePercent > 0;
+            const conditionDesc = condition ? `${condition.hours}h` : '';
+            const title = isUp ? '🚀 代币暴涨' : '📉 代币暴跌';
+            const body = `${token.symbol}\n当前价格: $${token.price.toFixed(4)}\n${conditionDesc}${isUp ? '上涨' : '下跌'}: ${Math.abs(priceChangePercent).toFixed(2)}%`;
+            
+            try {
+                const notification = new Notification(title, {
+                    body: body,
+                    icon: 'https://cdn-icons-png.flaticon.com/512/3669/3669756.png',
+                    badge: 'https://cdn-icons-png.flaticon.com/512/3669/3669756.png'
+                });
+                
+                // 3秒后自动关闭通知
+                setTimeout(() => {
+                    notification.close();
+                }, 3000);
+                
+                // 记录通知时间
+                lastNotifications[token.symbol] = now;
+                
+                // 记录到通知历史
+                const notificationData = {
+                    id: Date.now(),
+                    symbol: token.symbol,
+                    type: token.type,
+                    price: token.price,
+                    priceChangePercent: priceChangePercent,
+                    isUp: isUp,
+                    timestamp: now,
+                    read: false
+                };
+                
+                notificationsHistory.unshift(notificationData); // 添加到历史记录开头
+                unreadNotifications++;
+                updateNotificationBadge();
+                saveNotificationsHistory();
+                
+                // 推送通知到外部渠道
+                pushNotification(title, body, token);
+                
+                console.log('发送通知:', title, body);
+            } catch (error) {
+                console.error('发送通知失败:', error);
+            }
+        }
+        
+        // 推送通知到外部渠道
+        function pushNotification(title, body, token) {
+            if (!pushSettings.enabled || !pushSettings.channel || !pushSettings.key) {
+                return;
+            }
+            
+            const channel = pushSettings.channel;
+            const key = pushSettings.key;
+            const extra = pushSettings.extra;
+            
+            try {
+                switch (channel) {
+                    case 'serverchan':
+                        pushToServerChan(key, title, body);
+                        break;
+                    case 'pushplus':
+                        pushToPushPlus(key, title, body);
+                        break;
+                    case 'bark':
+                        pushToBark(key, title, body);
+                        break;
+                    case 'dingtalk':
+                        pushToDingTalk(key, title, body);
+                        break;
+                    case 'wecom':
+                        pushToWeCom(key, title, body);
+                        break;
+                    case 'telegram':
+                        pushToTelegram(key, extra, title, body);
+                        break;
+                    default:
+                        console.warn('未知的推送渠道:', channel);
+                }
+            } catch (error) {
+                console.error('推送通知失败:', error);
+            }
+        }
+        
+        // Server酱推送（微信）
+        function pushToServerChan(sendKey, title, body) {
+            const url = `https://sctapi.ftqq.com/${sendKey}.send`;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: title, desp: body })
+            }).then(res => res.json()).then(data => {
+                console.log('Server酱推送结果:', data);
+            }).catch(err => {
+                console.error('Server酱推送失败:', err);
+            });
+        }
+        
+        // PushPlus推送（微信）
+        function pushToPushPlus(token, title, body) {
+            const url = 'https://www.pushplus.plus/send';
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: token, title: title, content: body, template: 'txt' })
+            }).then(res => res.json()).then(data => {
+                console.log('PushPlus推送结果:', data);
+            }).catch(err => {
+                console.error('PushPlus推送失败:', err);
+            });
+        }
+        
+        // Bark推送（iOS）
+        function pushToBark(key, title, body) {
+            const serverUrl = key.startsWith('http') ? key : 'https://api.day.app';
+            const barkKey = key.startsWith('http') ? key.split('/').pop() : key;
+            const url = `${serverUrl}/${barkKey}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`;
+            fetch(url).then(res => res.json()).then(data => {
+                console.log('Bark推送结果:', data);
+            }).catch(err => {
+                console.error('Bark推送失败:', err);
+            });
+        }
+        
+        // 钉钉机器人推送
+        function pushToDingTalk(webhook, title, body) {
+            const url = webhook.startsWith('http') ? webhook : `https://oapi.dingtalk.com/robot/send?access_token=${webhook}`;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    msgtype: 'markdown',
+                    markdown: { title: title, text: `## ${title}\n\n${body}` }
+                })
+            }).then(res => res.json()).then(data => {
+                console.log('钉钉推送结果:', data);
+            }).catch(err => {
+                console.error('钉钉推送失败:', err);
+            });
+        }
+        
+        // 企业微信机器人推送
+        function pushToWeCom(webhook, title, body) {
+            const url = webhook.startsWith('http') ? webhook : `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${webhook}`;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    msgtype: 'markdown',
+                    markdown: { content: `## ${title}\n\n${body}` }
+                })
+            }).then(res => res.json()).then(data => {
+                console.log('企业微信推送结果:', data);
+            }).catch(err => {
+                console.error('企业微信推送失败:', err);
+            });
+        }
+        
+        // Telegram Bot推送
+        function pushToTelegram(botToken, chatId, title, body) {
+            if (!botToken || !chatId) {
+                console.error('Telegram推送缺少Bot Token或Chat ID');
+                return;
+            }
+            const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+            const text = `<b>${title}</b>\n\n${body}`;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    text: text,
+                    parse_mode: 'HTML'
+                })
+            }).then(res => res.json()).then(data => {
+                console.log('Telegram推送结果:', data);
+            }).catch(err => {
+                console.error('Telegram推送失败:', err);
+            });
+        }
+        
+        // 计算指定时间范围内的涨跌幅
+        function calcTimeRangeChange(token, hours) {
+            const now = new Date().getTime();
+            const timeWindowMs = hours * 60 * 60 * 1000;
+            
+            if (!token.priceHistory || token.priceHistory.length === 0) {
+                return 0;
+            }
+            
+            const timeRangeAgo = now - timeWindowMs;
+            let timeRangeAgoPrice = token.priceHistory[0];
+            
+            for (let i = 0; i < token.priceHistory.length; i++) {
+                const interval = timeWindowMs / token.priceHistory.length;
+                const timestamp = token.updateTime - (token.priceHistory.length - 1 - i) * interval;
+                if (timestamp <= timeRangeAgo) {
+                    timeRangeAgoPrice = token.priceHistory[i];
+                    break;
+                }
+            }
+            
+            if (timeRangeAgoPrice && timeRangeAgoPrice > 0) {
+                return ((token.price - timeRangeAgoPrice) / timeRangeAgoPrice) * 100;
+            }
+            return 0;
+        }
+        
+        // 检查价格波动并发送通知（多条件OR逻辑）
+        function checkPriceNotifications() {
+            const now = new Date().getTime();
+            tokensData.forEach(token => {
+                // 遍历所有筛选条件，满足任一即通知
+                for (const condition of notificationConditions) {
+                    const changePercent = calcTimeRangeChange(token, condition.hours);
+                    const timeWindowMs = condition.hours * 60 * 60 * 1000;
+                    
+                    if (Math.abs(changePercent) >= condition.threshold) {
+                        if (token.updateTime && (now - token.updateTime) <= timeWindowMs) {
+                            console.log(`发送通知: ${token.symbol} ${changePercent.toFixed(2)}% (${condition.hours}h阈值${condition.threshold}%)`);
+                            sendNotification(token, changePercent, condition);
+                            break; // 同一代币只触发一次通知
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 更新通知徽章
+        function updateNotificationBadge() {
+            const badge = document.getElementById('notification-badge');
+            if (badge) {
+                if (unreadNotifications > 0) {
+                    badge.textContent = unreadNotifications;
+                    badge.classList.remove('hidden');
+                } else {
+                    badge.textContent = '0';
+                    badge.classList.add('hidden');
+                }
+            }
+        }
+        
+        // 保存通知历史到本地存储
+        function saveNotificationsHistory() {
+            try {
+                localStorage.setItem('binanceNotifications', JSON.stringify({
+                    history: notificationsHistory,
+                    unread: unreadNotifications
+                }));
+            } catch (error) {
+                console.error('保存通知历史失败:', error);
+            }
+        }
+        
+        // 从本地存储加载通知历史
+        function loadNotificationsHistory() {
+            try {
+                const data = localStorage.getItem('binanceNotifications');
+                if (data) {
+                    const parsed = JSON.parse(data);
+                    notificationsHistory = parsed.history || [];
+                    unreadNotifications = parsed.unread || 0;
+                    updateNotificationBadge();
+                }
+            } catch (error) {
+                console.error('加载通知历史失败:', error);
+            }
+        }
+        
+        // 加载通知设置
+        function loadNotificationSettings() {
+            try {
+                const data = localStorage.getItem('binanceNotificationSettings');
+                if (data) {
+                    const parsed = JSON.parse(data);
+                    notificationConditions = parsed.conditions || [{ hours: 1, threshold: 30 }];
+                } else {
+                    notificationConditions = [{ hours: 1, threshold: 30 }];
+                }
+                renderConditionsList();
+            } catch (error) {
+                console.error('加载通知设置失败:', error);
+                notificationConditions = [{ hours: 1, threshold: 30 }];
+                renderConditionsList();
+            }
+        }
+        
+        // 渲染筛选条件列表
+        function renderConditionsList() {
+            const container = document.getElementById('notification-conditions');
+            if (!container) return;
+            
+            if (notificationConditions.length === 0) {
+                container.innerHTML = '<div class="text-xs text-gray-500 text-center py-2">暂无筛选条件</div>';
+                return;
+            }
+            
+            container.innerHTML = notificationConditions.map((cond, index) => `
+                <div class="flex items-center justify-between bg-gray-700 rounded-md px-3 py-2">
+                    <span class="text-sm text-gray-200">
+                        <span class="text-accent font-medium">${cond.hours}h</span> 涨跌幅 ≥ <span class="text-warning font-medium">${cond.threshold}%</span>
+                    </span>
+                    <button onclick="removeCondition(${index})" class="text-gray-400 hover:text-danger ml-2">
+                        <i class="fa fa-times"></i>
+                    </button>
+                </div>
+            `).join('');
+        }
+        
+        // 添加筛选条件
+        function addCondition() {
+            const hoursInput = document.getElementById('new-condition-hours');
+            const thresholdInput = document.getElementById('new-condition-threshold');
+            
+            const hours = parseFloat(hoursInput.value);
+            const threshold = parseFloat(thresholdInput.value);
+            
+            if (!hours || hours < 0.1) {
+                alert('时间范围必须大于0.1小时');
+                return;
+            }
+            
+            if (!threshold || threshold < 0.1) {
+                alert('涨跌幅阈值必须大于0.1%');
+                return;
+            }
+            
+            // 检查是否已存在相同条件
+            const exists = notificationConditions.some(c => c.hours === hours && c.threshold === threshold);
+            if (exists) {
+                alert('该筛选条件已存在');
+                return;
+            }
+            
+            notificationConditions.push({ hours, threshold });
+            renderConditionsList();
+            
+            // 清空输入框
+            hoursInput.value = '';
+            thresholdInput.value = '';
+            
+            // 自动保存
+            saveNotificationSettings();
+        }
+        
+        // 删除筛选条件
+        function removeCondition(index) {
+            notificationConditions.splice(index, 1);
+            renderConditionsList();
+            saveNotificationSettings();
+        }
+        
+        // 保存通知设置
+        function saveNotificationSettings() {
+            try {
+                localStorage.setItem('binanceNotificationSettings', JSON.stringify({
+                    conditions: notificationConditions
+                }));
+                updateConnectionStatus('通知设置保存成功', 'success');
+            } catch (error) {
+                console.error('保存通知设置失败:', error);
+                updateConnectionStatus('保存通知设置失败', 'error');
+            }
+        }
+        
+        // 保存推送设置
+        function savePushSettings() {
+            try {
+                const channel = document.getElementById('push-channel').value;
+                const key = document.getElementById('push-key').value.trim();
+                const extra = document.getElementById('push-extra').value.trim();
+                const enabled = document.getElementById('push-enabled').checked;
+                
+                pushSettings = {
+                    enabled: enabled,
+                    channel: channel,
+                    key: key,
+                    extra: extra
+                };
+                
+                localStorage.setItem('binancePushSettings', JSON.stringify(pushSettings));
+                updateConnectionStatus('推送设置保存成功', 'success');
+            } catch (error) {
+                console.error('保存推送设置失败:', error);
+                updateConnectionStatus('保存推送设置失败', 'error');
+            }
+        }
+        
+        // 加载推送设置
+        function loadPushSettings() {
+            try {
+                const data = localStorage.getItem('binancePushSettings');
+                if (data) {
+                    const parsed = JSON.parse(data);
+                    pushSettings = {
+                        enabled: parsed.enabled || false,
+                        channel: parsed.channel || '',
+                        key: parsed.key || '',
+                        extra: parsed.extra || ''
+                    };
+                    
+                    // 更新UI
+                    const channelSelect = document.getElementById('push-channel');
+                    const keyInput = document.getElementById('push-key');
+                    const extraInput = document.getElementById('push-extra');
+                    const enabledCheckbox = document.getElementById('push-enabled');
+                    
+                    if (channelSelect) {
+                        channelSelect.value = pushSettings.channel;
+                        handlePushChannelChange(pushSettings.channel);
+                    }
+                    
+                    if (keyInput) {
+                        keyInput.value = pushSettings.key;
+                    }
+                    
+                    if (extraInput) {
+                        extraInput.value = pushSettings.extra;
+                    }
+                    
+                    if (enabledCheckbox) {
+                        enabledCheckbox.checked = pushSettings.enabled;
+                    }
+                }
+            } catch (error) {
+                console.error('加载推送设置失败:', error);
+            }
+        }
+        
+        // 处理推送渠道切换
+        function handlePushChannelChange(channel) {
+            const keyLabel = document.getElementById('push-key-label');
+            const keyInput = document.getElementById('push-key');
+            const extraField = document.getElementById('push-extra-field');
+            const extraLabel = document.getElementById('push-extra-label');
+            const extraInput = document.getElementById('push-extra');
+            
+            switch (channel) {
+                case 'serverchan':
+                    keyLabel.textContent = 'SendKey';
+                    keyInput.placeholder = '请输入Server酱的SendKey';
+                    extraField.style.display = 'none';
+                    break;
+                case 'pushplus':
+                    keyLabel.textContent = 'Token';
+                    keyInput.placeholder = '请输入PushPlus的Token';
+                    extraField.style.display = 'none';
+                    break;
+                case 'bark':
+                    keyLabel.textContent = 'Bark密钥 / 地址';
+                    keyInput.placeholder = '请输入Bark密钥或完整地址';
+                    extraField.style.display = 'none';
+                    break;
+                case 'dingtalk':
+                    keyLabel.textContent = 'Webhook地址 / Token';
+                    keyInput.placeholder = '请输入钉钉机器人Webhook地址或Token';
+                    extraField.style.display = 'none';
+                    break;
+                case 'wecom':
+                    keyLabel.textContent = 'Webhook地址 / Key';
+                    keyInput.placeholder = '请输入企业微信机器人Webhook地址或Key';
+                    extraField.style.display = 'none';
+                    break;
+                case 'telegram':
+                    keyLabel.textContent = 'Bot Token';
+                    keyInput.placeholder = '请输入Telegram Bot Token';
+                    extraLabel.textContent = 'Chat ID';
+                    extraInput.placeholder = '请输入Chat ID';
+                    extraField.style.display = 'block';
+                    break;
+                default:
+                    keyLabel.textContent = 'API密钥 / 地址';
+                    keyInput.placeholder = '请输入API密钥或推送地址';
+                    extraField.style.display = 'none';
+            }
+        }
+        
+        // 渲染通知历史
+        function renderNotificationsHistory() {
+            const notificationsList = document.getElementById('notifications-list');
+            const notificationsCount = document.getElementById('notifications-count');
+            
+            if (notificationsHistory.length === 0) {
+                notificationsList.innerHTML = `
+                    <div class="text-center text-gray-500 py-8">
+                        <i class="fa fa-bell-slash-o text-4xl mb-2"></i>
+                        <p>暂无通知记录</p>
+                    </div>
+                `;
+                notificationsCount.textContent = '0 条通知';
+                return;
+            }
+            
+            notificationsList.innerHTML = notificationsHistory.map(notification => {
+                const date = new Date(notification.timestamp);
+                const timeString = date.toLocaleString('zh-CN');
+                const tokenType = tokenTypeMap[notification.type] || notification.type;
+                
+                return `
+                    <div class="bg-gray-800 rounded-lg p-4 ${notification.read ? '' : 'border-l-4 border-accent'}">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <div class="flex items-center mb-1">
+                                    <span class="text-lg font-semibold ${notification.isUp ? 'text-success' : 'text-danger'}">
+                                        ${notification.isUp ? '🚀' : '📉'} ${notification.symbol}
+                                    </span>
+                                    <span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-700">
+                                        ${tokenType}
+                                    </span>
+                                </div>
+                                <div class="text-sm text-gray-300 mb-2">
+                                    当前价格: $${notification.price.toFixed(4)}
+                                </div>
+                                <div class="text-sm ${notification.isUp ? 'text-success' : 'text-danger'}">
+                                    ${notification.isUp ? '上涨' : '下跌'}: ${Math.abs(notification.priceChangePercent).toFixed(2)}%
+                                </div>
+                            </div>
+                            <div class="text-xs text-gray-500">
+                                ${timeString}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            notificationsCount.textContent = `${notificationsHistory.length} 条通知`;
+        }
+        
+        // 标记所有通知为已读
+        function markAllNotificationsAsRead() {
+            notificationsHistory.forEach(notification => {
+                notification.read = true;
+            });
+            unreadNotifications = 0;
+            updateNotificationBadge();
+            saveNotificationsHistory();
+        }
+        
+        // 清空通知历史
+        function clearNotificationsHistory() {
+            notificationsHistory = [];
+            unreadNotifications = 0;
+            updateNotificationBadge();
+            saveNotificationsHistory();
+            renderNotificationsHistory();
+        }
+        
+        // 连接到币安WebSocket
+        function connectToBinanceWS() {
+            // 显示连接状态
+            updateConnectionStatus('正在连接到币安API...', 'warning');
+            
+            // 连接现货WebSocket
+            connectSpotWebSocket();
+            
+            // 连接合约WebSocket
+            connectFuturesWebSocket();
+        }
+        
+        // 连接现货WebSocket
+        function connectSpotWebSocket() {
+            console.log('开始连接现货WebSocket...');
+            
+            // 现货WebSocket URL - 使用新的miniTicker接口替代废弃的ticker接口
+            const spotWSUrl = 'wss://stream.binance.com:9443/ws/!miniTicker@arr';
+            
+            try {
+                // 创建WebSocket连接
+                const ws = new WebSocket(spotWSUrl);
+                
+                // 设置连接参数
+                ws.binaryType = 'arraybuffer';
+                ws.onopen = function() {
+                    console.log('现货WebSocket连接已打开');
+                    updateConnectionStatus('现货WebSocket已连接', 'success');
+                    checkConnectionStatus();
+                };
+                
+                ws.onmessage = function(event) {
+                    console.log('收到现货数据，长度:', event.data.length);
+                    try {
+                        // 尝试不同的数据解析方式
+                        let data;
+                        if (typeof event.data === 'string') {
+                            data = JSON.parse(event.data);
+                        } else {
+                            // 处理可能的二进制数据
+                            const text = new TextDecoder('utf-8').decode(event.data);
+                            data = JSON.parse(text);
+                        }
+                        
+                        console.log('现货数据解析成功，代币数量:', data.length);
+                        console.log('数据示例:', JSON.stringify(data[0], null, 2));
+                        
+                        processSpotData(data);
+                    } catch (error) {
+                        console.error('处理现货数据时出错:', error);
+                        console.error('原始数据类型:', typeof event.data);
+                        console.error('原始数据前200字符:', String(event.data).substring(0, 200));
+                    }
+                };
+                
+                ws.onclose = function(event) {
+                    console.log('现货WebSocket连接已关闭:', event.code, event.reason);
+                    updateConnectionStatus('现货WebSocket连接已关闭', 'error');
+                    spotWebSocket = null;
+                    scheduleReconnect('spot');
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('现货WebSocket错误:', error);
+                    updateConnectionStatus('现货WebSocket连接错误', 'error');
+                };
+                
+                spotWebSocket = ws;
+            } catch (error) {
+                console.error('创建现货WebSocket时出错:', error);
+                updateConnectionStatus('无法创建现货WebSocket', 'error');
+                scheduleReconnect('spot');
+            }
+        }
+        
+        // 连接合约WebSocket
+        function connectFuturesWebSocket() {
+            console.log('开始连接合约WebSocket...');
+            
+            // 合约WebSocket URL
+            const futuresWSUrl = 'wss://fstream.binance.com/ws/!ticker@arr';
+            
+            try {
+                // 创建WebSocket连接
+                const ws = new WebSocket(futuresWSUrl);
+                
+                // 设置连接参数
+                ws.binaryType = 'arraybuffer';
+                ws.onopen = function() {
+                    console.log('合约WebSocket连接已打开');
+                    updateConnectionStatus('合约WebSocket已连接', 'success');
+                    checkConnectionStatus();
+                };
+                
+                ws.onmessage = function(event) {
+                    console.log('收到合约数据，长度:', event.data.length);
+                    try {
+                        // 尝试不同的数据解析方式
+                        let data;
+                        if (typeof event.data === 'string') {
+                            data = JSON.parse(event.data);
+                        } else {
+                            // 处理可能的二进制数据
+                            const text = new TextDecoder('utf-8').decode(event.data);
+                            data = JSON.parse(text);
+                        }
+                        
+                        console.log('合约数据解析成功，代币数量:', data.length);
+                        console.log('合约数据示例:', JSON.stringify(data[0], null, 2));
+                        
+                        processFuturesData(data);
+                    } catch (error) {
+                        console.error('处理合约数据时出错:', error);
+                        console.error('原始数据类型:', typeof event.data);
+                        console.error('原始数据前200字符:', String(event.data).substring(0, 200));
+                    }
+                };
+                
+                ws.onclose = function(event) {
+                    console.log('合约WebSocket连接已关闭:', event.code, event.reason);
+                    updateConnectionStatus('合约WebSocket连接已关闭', 'error');
+                    futuresWebSocket = null;
+                    scheduleReconnect('futures');
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('合约WebSocket错误:', error);
+                    updateConnectionStatus('合约WebSocket连接错误', 'error');
+                };
+                
+                futuresWebSocket = ws;
+            } catch (error) {
+                console.error('创建合约WebSocket时出错:', error);
+                updateConnectionStatus('无法创建合约WebSocket', 'error');
+                scheduleReconnect('futures');
+            }
+        }
+        
+        // 检查连接状态
+        function checkConnectionStatus() {
+            if (spotWebSocket && futuresWebSocket) {
+                isConnected = true;
+                reconnectAttempts = 0;
+                updateConnectionStatus('已连接到币安API', 'success');
+            }
+        }
+        
+        // 安排重连
+        function scheduleReconnect(type) {
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                updateConnectionStatus('WebSocket连接失败', 'error');
+                
+                // 显示详细的连接问题排查建议
+                const debugInfo = document.getElementById('debug-info');
+                if (!debugInfo) {
+                    const debugDiv = document.createElement('div');
+                    debugDiv.id = 'debug-info';
+                    debugDiv.className = 'fixed bottom-40 right-4 px-4 py-3 bg-gray-800 rounded-md text-xs text-gray-300 z-50 max-w-xs';
+                    debugDiv.innerHTML = `
+                        <div class="font-bold mb-1">WebSocket连接失败：</div>
+                        <div>• 可能是API调用频率过高被限制</div>
+                        <div>• 请等待几分钟后刷新页面</div>
+                        <div>• 检查网络连接是否正常</div>
+                        <div>• 查看浏览器控制台了解详情</div>
+                        <div>• 不使用模拟数据，保持真实连接</div>
+                    `;
+                    document.body.appendChild(debugDiv);
+                }
+                
+                console.log('达到最大重连次数，停止重连尝试');
+                return;
+            }
+            
+            reconnectAttempts++;
+            // 增加重连间隔，避免频繁请求
+            const delay = Math.min(2000 * Math.pow(2, reconnectAttempts), 60000); // 最长60秒
+            
+            console.log(`计划在${delay}ms后重新连接 ${type} WebSocket (尝试${reconnectAttempts}/${maxReconnectAttempts})`);
+            updateConnectionStatus(`等待${delay/1000}秒后重连(${reconnectAttempts}/${maxReconnectAttempts})...`, 'warning');
+            
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+            }
+            
+            reconnectTimeout = setTimeout(() => {
+                console.log(`开始第${reconnectAttempts}次重连尝试`);
+                if (type === 'spot') {
+                    connectSpotWebSocket();
+                } else if (type === 'futures') {
+                    connectFuturesWebSocket();
+                }
+            }, delay);
+        }
+        
+        // 更新连接状态显示
+        function updateConnectionStatus(message, type) {
+            console.log(`连接状态更新: ${type} - ${message}`);
+            
+            // 创建或更新状态指示器
+            let statusIndicator = document.getElementById('connection-status');
+            
+            if (!statusIndicator) {
+                statusIndicator = document.createElement('div');
+                statusIndicator.id = 'connection-status';
+                statusIndicator.className = 'fixed bottom-4 right-4 px-4 py-2 rounded-md text-sm z-50 transition-all duration-300 transform translate-y-0 opacity-100';
+                
+                // 添加到页面
+                document.body.appendChild(statusIndicator);
+            }
+            
+            // 设置状态样式
+            statusIndicator.className = 'fixed bottom-4 right-4 px-4 py-2 rounded-md text-sm z-50 transition-all duration-300 transform translate-y-0 opacity-100';
+            
+            if (type === 'success') {
+                statusIndicator.classList.add('bg-success', 'text-white');
+                statusIndicator.innerHTML = '<i class="fa fa-check-circle mr-1"></i> ' + message;
+            } else if (type === 'warning') {
+                statusIndicator.classList.add('bg-warning', 'text-white');
+                statusIndicator.innerHTML = '<i class="fa fa-exclamation-circle mr-1"></i> ' + message;
+            } else if (type === 'error') {
+                statusIndicator.classList.add('bg-danger', 'text-white');
+                statusIndicator.innerHTML = '<i class="fa fa-times-circle mr-1"></i> ' + message;
+            }
+            
+            // 显示连接统计
+            const stats = document.getElementById('connection-stats');
+            if (!stats) {
+                const statsDiv = document.createElement('div');
+                statsDiv.id = 'connection-stats';
+                statsDiv.className = 'fixed bottom-20 right-4 px-4 py-2 bg-gray-800 rounded-md text-xs text-gray-300 z-50';
+                document.body.appendChild(statsDiv);
+            }
+            
+            const statsDiv = document.getElementById('connection-stats');
+            statsDiv.innerHTML = `
+                <div>现货连接: ${spotWebSocket ? '已连接' : '未连接'}</div>
+                <div>合约连接: ${futuresWebSocket ? '已连接' : '未连接'}</div>
+                <div>总代币数: ${tokensData.length}</div>
+                <div>现货代币: ${tokensData.filter(t => t.type === 'spot').length}</div>
+                <div>合约代币: ${tokensData.filter(t => t.type === 'futures').length}</div>
+                <div>Alpha代币: ${tokensData.filter(t => t.type === 'alpha').length}</div>
+            `;
+            
+            // 如果是成功状态，3秒后自动隐藏
+            if (type === 'success') {
+                setTimeout(() => {
+                    statusIndicator.classList.add('translate-y-10', 'opacity-0');
+                    setTimeout(() => {
+                        if (statusIndicator.parentNode) {
+                            statusIndicator.parentNode.removeChild(statusIndicator);
+                        }
+                    }, 300);
+                }, 3000);
+            }
+        }
+        
+        // 处理现货数据（适配miniTicker格式）
+        function processSpotData(data) {
+            console.log('开始处理现货数据，数据长度:', data.length);
+            
+            // Alpha代币列表（根据市场认知的新兴/高增长代币）
+            const alphaTokens = [
+                'APTUSDT', 'SEIUSDT', 'SUIUSDT', 'ICPUSDT', 'NEARUSDT', 
+                'AXSUSDT', 'SANDUSDT', 'MANAUSDT', 'THETAUSDT', 'ENJUSDT', 
+                'CHZUSDT', 'AAVEUSDT', 'MKRUSDT', 'UNIUSDT', 'COMPUSDT',
+                'LINKUSDT', 'MATICUSDT', 'SOLUSDT', 'AVAXUSDT', 'DOTUSDT'
+            ];
+            
+            let spotCount = 0;
+            let alphaCount = 0;
+            let processedCount = 0;
+            
+            data.forEach(item => {
+                try {
+                    processedCount++;
+                    
+                    // 检查数据结构
+                    if (!item || typeof item !== 'object') {
+                        console.warn('跳过无效数据项:', item);
+                        return;
+                    }
+                    
+                    // 打印字段信息（仅前几个数据项）
+                    if (processedCount <= 3) {
+                        console.log(`数据项${processedCount}字段:`, Object.keys(item));
+                        console.log(`数据项${processedCount}示例值:`, {
+                            e: item.e,  // 事件类型
+                            E: item.E,  // 事件时间
+                            s: item.s,  // 交易对
+                            c: item.c,  // 收盘价
+                            o: item.o,  // 开盘价
+                            h: item.h,  // 最高价
+                            l: item.l,  // 最低价
+                            v: item.v,  // 成交量(基础资产)
+                            q: item.q   // 成交量(报价资产)
+                        });
+                    }
+                    
+                    // 检查必要字段
+                    if (!item.s || !item.c || !item.o || !item.h || !item.l || !item.v || !item.q) {
+                        console.warn('跳过缺少必要字段的数据项:', item.s);
+                        return;
+                    }
+                    
+                    // 只处理USDT交易对
+                    if (!item.s.endsWith('USDT')) {
+                        if (processedCount <= 5) {
+                            console.log('跳过非USDT交易对:', item.s);
+                        }
+                        return;
+                    }
+                    
+                    // 确定代币类型（现货或Alpha）
+                    let tokenType = alphaTokens.includes(item.s) ? 'alpha' : 'spot';
+                    
+                    // 检查是否已经存在更高优先级的同名代币
+                    const existingTokenIndex = tokensData.findIndex(t => t.symbol === item.s);
+                    if (existingTokenIndex !== -1) {
+                        const existingToken = tokensData[existingTokenIndex];
+                        // 优先级：现货 > 合约 > alpha
+                        if (existingToken.type === 'spot') {
+                            // 已经有现货版本，跳过
+                            return;
+                        } else if (existingToken.type === 'futures' && tokenType === 'alpha') {
+                            // 已经有合约版本，alpha优先级更低，跳过
+                            return;
+                        }
+                    }
+                    
+                    if (tokenType === 'alpha') {
+                        alphaCount++;
+                        console.log('发现Alpha代币:', item.s);
+                    } else {
+                        spotCount++;
+                        if (processedCount <= 3) {
+                            console.log('发现现货代币:', item.s);
+                        }
+                    }
+                    
+                    // 解析价格数据
+                    const closePrice = parseFloat(item.c);
+                    const openPrice = parseFloat(item.o);
+                    const highPrice = parseFloat(item.h);
+                    const lowPrice = parseFloat(item.l);
+                    const volume = parseFloat(item.q); // 使用报价资产成交量
+                    
+                    // 计算24小时涨跌幅（使用开盘价计算，与币安API保持一致）
+                    const priceChange = closePrice - openPrice;
+                    const priceChangePercent = (priceChange / openPrice) * 100;
+                    
+                    // 检查是否已存在该代币
+                    let tokenIndex = tokensData.findIndex(token => token.symbol === item.s && token.type === tokenType);
+                    
+                    // 计算价格历史
+                    let priceHistory = [];
+                    if (tokenIndex !== -1) {
+                        // 如果已存在，保留历史数据
+                        priceHistory = [...tokensData[tokenIndex].priceHistory];
+                        priceHistory.push(closePrice);
+                        
+                        // 保持历史数据长度为24
+                        if (priceHistory.length > 24) {
+                            priceHistory.shift();
+                        }
+                    } else {
+                        // 如果不存在，初始化历史数据（使用当前价格，而不是24小时前的开盘价）
+                        priceHistory = Array(23).fill(closePrice).concat([closePrice]);
+                    }
+                    
+                    // 创建或更新代币数据
+                    const tokenData = {
+                        symbol: item.s,
+                        type: tokenType,
+                        price: closePrice,
+                        priceChangePercent: priceChangePercent,
+                        volume: volume,
+                        highPrice: highPrice,
+                        lowPrice: lowPrice,
+                        openPrice: openPrice,
+                        priceHistory: priceHistory,
+                        updateTime: item.E || new Date().getTime()
+                    };
+                    
+                    // 更新或添加代币
+                    if (tokenIndex !== -1) {
+                        tokensData[tokenIndex] = tokenData;
+                    } else {
+                        tokensData.push(tokenData);
+                    }
+                    
+                } catch (error) {
+                    console.error('处理单个现货代币时出错:', error);
+                    console.error('问题数据项:', item);
+                }
+            });
+            
+            console.log(`现货数据处理完成: 处理${processedCount}个, 现货${spotCount}个, Alpha${alphaCount}个`);
+            console.log('当前tokensData总数:', tokensData.length);
+            
+            // 检查价格波动并发送通知
+            checkPriceNotifications();
+            
+            // 重新过滤链上代币（去除已上币安的）
+            refilterOnchainTokens();
+            
+            // 更新显示
+            updateDisplay();
+        }
+        
+        // 显示加载错误
+        function showLoadingError() {
+            const tableBody = document.getElementById('tokens-table-body');
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="px-4 py-12 text-center text-gray-400">
+                        <div class="mb-4">
+                            <i class="fa fa-exclamation-triangle text-4xl text-warning"></i>
+                        </div>
+                        <h3 class="text-xl font-semibold mb-2">数据加载失败</h3>
+                        <p class="mb-4">无法连接到币安API，请检查以下事项：</p>
+                        <ul class="text-left max-w-md mx-auto space-y-2 mb-6">
+                            <li>• 网络连接是否正常</li>
+                            <li>• 是否有防火墙或代理限制</li>
+                            <li>• API调用频率是否过高</li>
+                            <li>• 浏览器是否支持WebSocket</li>
+                        </ul>
+                        <button id="retry-btn" class="bg-accent hover:bg-blue-600 text-white px-6 py-2 rounded-md transition-colors">
+                            <i class="fa fa-refresh mr-2"></i>重新连接
+                        </button>
+                    </td>
+                </tr>
+            `;
+            
+            // 绑定重试按钮事件
+            document.getElementById('retry-btn').addEventListener('click', function() {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="px-4 py-8 text-center text-gray-500">
+                            <div class="animate-pulse flex flex-col items-center">
+                                <i class="fa fa-spinner fa-spin text-3xl mb-2"></i>
+                                <p>正在重新连接...</p>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                forceReconnect();
+            });
+        }
+        
+        // 处理合约数据
+        function processFuturesData(data) {
+            console.log('开始处理合约数据，数据长度:', data.length);
+            
+            let futuresCount = 0;
+            let processedCount = 0;
+            
+            data.forEach(item => {
+                try {
+                    processedCount++;
+                    
+                    // 检查数据结构
+                    if (!item || typeof item !== 'object') {
+                        console.warn('跳过无效数据项:', item);
+                        return;
+                    }
+                    
+                    // 打印字段信息（仅前几个数据项）
+                    if (processedCount <= 3) {
+                        console.log(`合约数据项${processedCount}字段:`, Object.keys(item));
+                        console.log(`合约数据项${processedCount}示例值:`, {
+                            s: item.s,
+                            c: item.c,
+                            P: item.P,
+                            p: item.p,
+                            o: item.o,
+                            h: item.h,
+                            l: item.l,
+                            v: item.v
+                        });
+                    }
+                    
+                    // 只处理USDT交易对
+                    if (!item.s || !item.s.endsWith('USDT')) {
+                        if (processedCount <= 5) {
+                            console.log('跳过非USDT合约交易对:', item.s);
+                        }
+                        return;
+                    }
+                    
+                    futuresCount++;
+                    if (processedCount <= 3) {
+                        console.log('发现合约代币:', item.s);
+                    }
+                    
+                    // 检查是否已经存在更高优先级的同名代币
+                    const existingTokenIndex = tokensData.findIndex(t => t.symbol === item.s);
+                    if (existingTokenIndex !== -1) {
+                        const existingToken = tokensData[existingTokenIndex];
+                        // 优先级：现货 > 合约 > alpha
+                        if (existingToken.type === 'spot') {
+                            // 已经有现货版本，跳过
+                            return;
+                        }
+                    }
+                    
+                    // 确保必要字段存在
+                    if (!item.c || !item.P || !item.o || !item.h || !item.l || !item.v) {
+                        console.warn('跳过缺少必要字段的合约数据项:', item.s);
+                        return;
+                    }
+                    
+                    // 检查是否已存在该代币
+                    let tokenIndex = tokensData.findIndex(token => token.symbol === item.s && token.type === 'futures');
+                    
+                    // 计算价格历史
+                    let priceHistory = [];
+                    if (tokenIndex !== -1) {
+                        // 如果已存在，保留历史数据
+                        priceHistory = [...tokensData[tokenIndex].priceHistory];
+                        priceHistory.push(parseFloat(item.c));
+                        
+                        // 保持历史数据长度为24
+                        if (priceHistory.length > 24) {
+                            priceHistory.shift();
+                        }
+                    } else {
+                        // 如果不存在，初始化历史数据（使用当前价格，而不是24小时前的开盘价）
+                        priceHistory = Array(23).fill(parseFloat(item.c)).concat([parseFloat(item.c)]);
+                    }
+                    
+                    // 创建或更新代币数据
+                    const tokenData = {
+                        symbol: item.s,
+                        type: 'futures',
+                        price: parseFloat(item.c),
+                        priceChangePercent: parseFloat(item.P), // 使用大写P字段（24小时涨跌幅）
+                        volume: parseFloat(item.v),
+                        highPrice: parseFloat(item.h),
+                        lowPrice: parseFloat(item.l),
+                        openPrice: parseFloat(item.o),
+                        priceHistory: priceHistory,
+                        updateTime: new Date().getTime()
+                    };
+                    
+                    // 更新或添加代币
+                    if (tokenIndex !== -1) {
+                        tokensData[tokenIndex] = tokenData;
+                    } else {
+                        tokensData.push(tokenData);
+                    }
+                    
+                } catch (error) {
+                    console.error('处理单个合约代币时出错:', error);
+                    console.error('问题数据项:', item);
+                }
+            });
+            
+            console.log(`合约数据处理完成: 处理${processedCount}个, 合约${futuresCount}个`);
+            console.log('当前tokensData总数:', tokensData.length);
+            
+            // 检查价格波动并发送通知
+            checkPriceNotifications();
+            
+            // 重新过滤链上代币（去除已上币安的）
+            refilterOnchainTokens();
+            
+            // 更新显示
+            updateDisplay();
+        }
+        
+        // 更新显示
+        function updateDisplay() {
+            console.log('=== updateDisplay() 被调用 ===');
+            
+            // 去重逻辑：按优先级保留最高优先级的代币
+            const uniqueTokens = [];
+            const tokenSymbols = new Set();
+            
+            // 按优先级顺序处理：现货 > 合约 > alpha
+            const priorityOrder = ['spot', 'futures', 'alpha'];
+            
+            priorityOrder.forEach(type => {
+                tokensData.forEach(token => {
+                    if (token.type === type && !tokenSymbols.has(token.symbol)) {
+                        uniqueTokens.push(token);
+                        tokenSymbols.add(token.symbol);
+                    }
+                });
+            });
+            
+            // 更新tokensData为去重后的数据
+            tokensData = uniqueTokens;
+            
+            console.log('去重后tokensData长度:', tokensData.length);
+            console.log('现货代币:', tokensData.filter(t => t.type === 'spot').length);
+            console.log('合约代币:', tokensData.filter(t => t.type === 'futures').length);
+            console.log('Alpha代币:', tokensData.filter(t => t.type === 'alpha').length);
+            
+            // 更新总代币数显示
+            const totalTokensEl = document.getElementById('total-tokens');
+            if (totalTokensEl) {
+                totalTokensEl.textContent = tokensData.length;
+            } else {
+                console.error('未找到total-tokens元素');
+            }
+            
+            // 更新最后更新时间
+            lastUpdateTime = new Date();
+            updateLastUpdateTime();
+            
+            // 渲染代币表格
+            renderTokensTable();
+            
+            // 更新底部价格显示
+            updateBottomPrices();
+        }
+        
+        // 强制重新连接
+        function forceReconnect() {
+            console.log('执行强制重新连接...');
+            
+            // 重置重连计数
+            reconnectAttempts = 0;
+            
+            // 清理现有连接
+            if (spotWebSocket) {
+                try {
+                    spotWebSocket.close();
+                } catch (error) {
+                    console.error('关闭现货WebSocket时出错:', error);
+                }
+                spotWebSocket = null;
+            }
+            
+            if (futuresWebSocket) {
+                try {
+                    futuresWebSocket.close();
+                } catch (error) {
+                    console.error('关闭合约WebSocket时出错:', error);
+                }
+                futuresWebSocket = null;
+            }
+            
+            // 清理定时器
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+            
+            // 清空数据
+            tokensData = [];
+            
+            // 显示状态
+            updateConnectionStatus('正在执行强制重新连接...', 'warning');
+            
+            // 重新连接
+            setTimeout(() => {
+                connectSpotWebSocket();
+                connectFuturesWebSocket();
+            }, 1000);
+        }
+        
+        // 初始化图表
+        function initCharts() {
+        }
+        
+        // 渲染代币表格
+        function renderTokensTable() {
+            const tableBody = document.getElementById('tokens-table-body');
+            tableBody.innerHTML = '';
+            
+            // 应用筛选
+            applyFilters();
+            
+            // 应用排序
+            applySorting();
+            
+            // 计算分页
+            const totalPages = Math.ceil(filteredTokens.length / itemsPerPage);
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, filteredTokens.length);
+            const pageTokens = filteredTokens.slice(startIndex, endIndex);
+            
+            // 更新筛选结果数量
+            document.getElementById('filtered-tokens').textContent = filteredTokens.length;
+            
+            // 更新显示范围
+            document.getElementById('showing-range').textContent = filteredTokens.length > 0 
+                ? `${startIndex + 1}-${endIndex}` 
+                : '0-0';
+            
+            // 更新总页数
+            document.getElementById('total-pages').textContent = totalPages;
+            
+            // 渲染代币行
+            if (pageTokens.length > 0) {
+                pageTokens.forEach((token, index) => {
+                    const row = createTokenRow(token, index);
+                    tableBody.appendChild(row);
+                });
+            } else {
+                // 没有匹配的代币
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = `
+                    <td colspan="7" class="px-4 py-8 text-center text-gray-500">
+                        <i class="fa fa-search text-3xl mb-2"></i>
+                        <p>没有找到匹配的代币</p>
+                    </td>
+                `;
+                tableBody.appendChild(emptyRow);
+            }
+            
+            // 更新分页按钮
+            updatePaginationButtons(totalPages);
+            
+            // 更新分页按钮状态
+            document.getElementById('prev-page').disabled = currentPage === 1;
+            document.getElementById('next-page').disabled = currentPage === totalPages || totalPages === 0;
+        }
+        
+        // 创建代币行
+        function createTokenRow(token, index) {
+            const row = document.createElement('tr');
+            row.className = 'token-row border-b border-gray-700 hover:bg-gray-800/30';
+            row.dataset.symbol = token.symbol;
+            
+            // 确定涨跌幅颜色
+            const isPositive = token.priceChangePercent >= 0;
+            const changeColorClass = isPositive ? 'text-success' : 'text-danger';
+            const changeIcon = isPositive ? 'fa-caret-up' : 'fa-caret-down';
+            
+            // 格式化价格和交易量
+            const formattedPrice = formatPrice(token.price);
+            const formattedVolume = formatVolume(token.volume);
+            
+            // 创建迷你图表
+            const miniChartCanvas = document.createElement('canvas');
+            miniChartCanvas.className = 'mini-chart';
+            createMiniChart(miniChartCanvas, token.priceHistory, isPositive);
+            
+            // 设置行内容
+            row.innerHTML = `
+                <td class="px-4 py-3">
+                    <div class="font-medium">${token.symbol}</div>
+                </td>
+                <td class="px-4 py-3">
+                    <span class="px-2 py-1 rounded-full text-xs ${getTypeColorClass(token.type)}">
+                        ${tokenTypeMap[token.type]}
+                    </span>
+                </td>
+                <td class="px-4 py-3 font-mono price-cell" data-price="${token.price}">
+                    ${formattedPrice}
+                </td>
+                <td class="px-4 py-3 ${changeColorClass} font-medium price-change-cell" data-change="${token.priceChangePercent}">
+                    <i class="fa ${changeIcon} mr-1"></i>
+                    ${token.priceChangePercent.toFixed(2)}%
+                </td>
+                <td class="px-4 py-3 font-mono volume-cell" data-volume="${token.volume}">
+                    ${formattedVolume}
+                </td>
+                <td class="px-4 py-3">
+                    <div class="mini-chart-container">
+                        ${miniChartCanvas.outerHTML}
+                    </div>
+                </td>
+                <td class="px-4 py-3">
+                    <button class="view-details-btn bg-accent hover:bg-blue-600 text-white px-3 py-1 rounded-md text-sm transition-colors" data-symbol="${token.symbol}">
+                        查看详情
+                    </button>
+                </td>
+            `;
+            
+            // 添加查看详情事件
+            const viewDetailsBtn = row.querySelector('.view-details-btn');
+            viewDetailsBtn.addEventListener('click', () => showTokenDetails(token));
+            
+            return row;
+        }
+        
+        // 创建迷你图表
+        function createMiniChart(canvas, priceHistory, isPositive) {
+            const ctx = canvas.getContext('2d');
+            
+            // 创建图表
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(priceHistory.length).fill(''),
+                    datasets: [{
+                        data: priceHistory,
+                        borderColor: isPositive ? '#10B981' : '#EF4444',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.4,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            enabled: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: false
+                        },
+                        y: {
+                            display: false,
+                            min: Math.min(...priceHistory) * 0.98,
+                            max: Math.max(...priceHistory) * 1.02
+                        }
+                    },
+                    animation: false
+                }
+            });
+        }
+        
+        // 更新分页按钮
+        function updatePaginationButtons(totalPages) {
+            const paginationContainer = document.querySelector('.flex.space-x-1');
+            paginationContainer.innerHTML = '';
+            
+            // 最大显示的页码数量
+            const maxVisiblePages = 5;
+            
+            // 计算起始和结束页码
+            let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+            
+            // 调整起始页码以保持显示的页码数量一致
+            if (endPage - startPage + 1 < maxVisiblePages) {
+                startPage = Math.max(1, endPage - maxVisiblePages + 1);
+            }
+            
+            // 添加页码按钮
+            for (let i = startPage; i <= endPage; i++) {
+                const button = document.createElement('button');
+                button.className = `page-btn px-3 py-1 rounded-md text-sm transition-colors ${i === currentPage ? 'bg-accent text-white' : 'bg-gray-800 hover:bg-gray-700 text-white'}`;
+                button.textContent = i;
+                button.dataset.page = i;
+                
+                button.addEventListener('click', () => {
+                    currentPage = i;
+                    renderTokensTable();
+                });
+                
+                paginationContainer.appendChild(button);
+            }
+        }
+        
+        // 应用筛选
+        function applyFilters() {
+            // 获取筛选值
+            const minChange = document.getElementById('min-change').value ? parseFloat(document.getElementById('min-change').value) : -Infinity;
+            const maxChange = document.getElementById('max-change').value ? parseFloat(document.getElementById('max-change').value) : Infinity;
+            const minPrice = document.getElementById('min-price').value ? parseFloat(document.getElementById('min-price').value) : 0;
+            const maxPrice = document.getElementById('max-price').value ? parseFloat(document.getElementById('max-price').value) : Infinity;
+            const minVolume = document.getElementById('min-volume').value ? parseFloat(document.getElementById('min-volume').value) : 0;
+            const maxVolume = document.getElementById('max-volume').value ? parseFloat(document.getElementById('max-volume').value) : Infinity;
+            const searchTerm = document.getElementById('search-input').value.toLowerCase().trim();
+            
+            // 应用筛选
+            filteredTokens = tokensData.filter(token => {
+                // 代币类型筛选
+                if (!selectedTokenTypes.includes(token.type)) {
+                    return false;
+                }
+                
+                // 涨跌幅筛选
+                if (token.priceChangePercent < minChange || token.priceChangePercent > maxChange) {
+                    return false;
+                }
+                
+                // 价格筛选
+                if (token.price < minPrice || token.price > maxPrice) {
+                    return false;
+                }
+                
+                // 交易量筛选
+                if (token.volume < minVolume || token.volume > maxVolume) {
+                    return false;
+                }
+                
+                // 搜索筛选
+                if (searchTerm && !token.symbol.toLowerCase().includes(searchTerm)) {
+                    return false;
+                }
+                
+                return true;
+            });
+        }
+        
+        // 应用排序
+        function applySorting() {
+            const sortSelect = document.getElementById('sort-select');
+            const [sortField, sortOrder] = sortSelect.value.split('-');
+            
+            filteredTokens.sort((a, b) => {
+                let aValue, bValue;
+                
+                // 获取排序值
+                switch (sortField) {
+                    case 'symbol':
+                        aValue = a.symbol.toLowerCase();
+                        bValue = b.symbol.toLowerCase();
+                        break;
+                    case 'price':
+                        aValue = a.price;
+                        bValue = b.price;
+                        break;
+                    case 'priceChangePercent':
+                        aValue = a.priceChangePercent;
+                        bValue = b.priceChangePercent;
+                        break;
+                    case 'volume':
+                        aValue = a.volume;
+                        bValue = b.volume;
+                        break;
+                    default:
+                        return 0;
+                }
+                
+                // 执行排序
+                if (aValue < bValue) {
+                    return sortOrder === 'asc' ? -1 : 1;
+                }
+                if (aValue > bValue) {
+                    return sortOrder === 'asc' ? 1 : -1;
+                }
+                return 0;
+            });
+        }
+        
+        // 显示代币详情
+        function showTokenDetails(token) {
+            const modal = document.getElementById('token-modal');
+            
+            // 更新模态框内容
+            document.getElementById('modal-token-name').textContent = `${token.symbol} 详情`;
+            document.getElementById('modal-symbol').textContent = token.symbol;
+            document.getElementById('modal-type').textContent = tokenTypeMap[token.type];
+            document.getElementById('modal-price').textContent = `${formatPrice(token.price)} USDT`;
+            
+            // 更新涨跌幅
+            const priceChangeEl = document.getElementById('modal-price-change');
+            const isPositive = token.priceChangePercent >= 0;
+            priceChangeEl.textContent = `${isPositive ? '+' : ''}${token.priceChangePercent.toFixed(2)}%`;
+            priceChangeEl.className = `font-medium ${isPositive ? 'text-success' : 'text-danger'}`;
+            
+            // 更新其他信息
+            document.getElementById('modal-volume').textContent = `${formatVolume(token.volume)} USDT`;
+            document.getElementById('modal-high').textContent = `${formatPrice(token.highPrice)} USDT`;
+            document.getElementById('modal-low').textContent = `${formatPrice(token.lowPrice)} USDT`;
+            document.getElementById('modal-open').textContent = `${formatPrice(token.openPrice)} USDT`;
+            
+            // 格式化更新时间
+            const updateDate = new Date(token.updateTime);
+            document.getElementById('modal-update-time').textContent = `${updateDate.toLocaleDateString()} ${updateDate.toLocaleTimeString()}`;
+            
+            // 更新风险指标
+            updateRiskIndicators(token);
+            
+            // 更新AI分析
+            updateAIAnalysis(token);
+            
+            // 创建详细图表
+            createDetailChart(token);
+            
+            // 显示模态框
+            modal.classList.remove('hidden');
+        }
+        
+        // 更新风险指标
+        function updateRiskIndicators(token) {
+            // 波动性指标（基于涨跌幅）
+            const volatilityValue = document.getElementById('volatility-value');
+            const volatilityBar = document.getElementById('volatility-bar');
+            
+            const changeAbs = Math.abs(token.priceChangePercent);
+            let volatilityLevel, volatilityPercent;
+            
+            if (changeAbs > 20) {
+                volatilityLevel = '极高';
+                volatilityPercent = 100;
+            } else if (changeAbs > 15) {
+                volatilityLevel = '很高';
+                volatilityPercent = 85;
+            } else if (changeAbs > 10) {
+                volatilityLevel = '高';
+                volatilityPercent = 70;
+            } else if (changeAbs > 5) {
+                volatilityLevel = '中等';
+                volatilityPercent = 50;
+            } else if (changeAbs > 2) {
+                volatilityLevel = '低';
+                volatilityPercent = 30;
+            } else {
+                volatilityLevel = '很低';
+                volatilityPercent = 15;
+            }
+            
+            volatilityValue.textContent = volatilityLevel;
+            volatilityBar.style.width = `${volatilityPercent}%`;
+            
+            // 根据波动性设置颜色
+            if (volatilityPercent > 70) {
+                volatilityBar.className = 'bg-danger h-2 rounded-full';
+            } else if (volatilityPercent > 40) {
+                volatilityBar.className = 'bg-warning h-2 rounded-full';
+            } else {
+                volatilityBar.className = 'bg-success h-2 rounded-full';
+            }
+            
+            // 交易量变化（模拟）
+            const volumeChangeValue = document.getElementById('volume-change-value');
+            const volumeChangeBar = document.getElementById('volume-change-bar');
+            
+            const volumeChange = (Math.random() * 50 - 20).toFixed(0);
+            volumeChangeValue.textContent = `${volumeChange > 0 ? '+' : ''}${volumeChange}%`;
+            
+            const volumeChangePercent = Math.min(Math.abs(volumeChange) * 2, 100);
+            volumeChangeBar.style.width = `${volumeChangePercent}%`;
+            
+            if (volumeChange > 0) {
+                volumeChangeBar.className = 'bg-success h-2 rounded-full';
+            } else {
+                volumeChangeBar.className = 'bg-danger h-2 rounded-full';
+            }
+            
+            // 市场情绪（基于涨跌幅和交易量）
+            const sentimentValue = document.getElementById('sentiment-value');
+            const sentimentBar = document.getElementById('sentiment-bar');
+            
+            let sentimentScore = 50; // 中性
+            
+            // 涨跌幅影响
+            if (token.priceChangePercent > 10) {
+                sentimentScore += 30;
+            } else if (token.priceChangePercent > 5) {
+                sentimentScore += 20;
+            } else if (token.priceChangePercent > 0) {
+                sentimentScore += 10;
+            } else if (token.priceChangePercent > -5) {
+                sentimentScore -= 10;
+            } else if (token.priceChangePercent > -10) {
+                sentimentScore -= 20;
+            } else {
+                sentimentScore -= 30;
+            }
+            
+            // 交易量影响
+            if (volumeChange > 20) {
+                sentimentScore += 10;
+            } else if (volumeChange > 0) {
+                sentimentScore += 5;
+            } else if (volumeChange > -20) {
+                sentimentScore -= 5;
+            } else {
+                sentimentScore -= 10;
+            }
+            
+            // 确保分数在0-100之间
+            sentimentScore = Math.max(0, Math.min(100, sentimentScore));
+            
+            let sentimentLevel;
+            if (sentimentScore > 80) {
+                sentimentLevel = '极度看涨';
+            } else if (sentimentScore > 65) {
+                sentimentLevel = '强烈看涨';
+            } else if (sentimentScore > 55) {
+                sentimentLevel = '看涨';
+            } else if (sentimentScore > 45) {
+                sentimentLevel = '中性';
+            } else if (sentimentScore > 30) {
+                sentimentLevel = '看跌';
+            } else if (sentimentScore > 15) {
+                sentimentLevel = '强烈看跌';
+            } else {
+                sentimentLevel = '极度看跌';
+            }
+            
+            sentimentValue.textContent = sentimentLevel;
+            sentimentBar.style.width = `${sentimentScore}%`;
+            
+            if (sentimentScore > 65) {
+                sentimentBar.className = 'bg-success h-2 rounded-full';
+            } else if (sentimentScore > 45) {
+                sentimentBar.className = 'bg-warning h-2 rounded-full';
+            } else {
+                sentimentBar.className = 'bg-danger h-2 rounded-full';
+            }
+        }
+        
+        // 更新AI分析
+        function updateAIAnalysis(token) {
+            const marketAnalysisEl = document.getElementById('ai-market-analysis');
+            const riskWarningEl = document.getElementById('ai-risk-warning');
+            
+            // 基于涨跌幅生成市场分析
+            let marketAnalysis = '';
+            let riskWarning = '';
+            
+            if (token.priceChangePercent > 15) {
+                marketAnalysis = `
+                    基于近期价格走势和交易量分析，${token.symbol}显示出强劲的上升趋势。过去24小时内价格大幅上涨了${token.priceChangePercent.toFixed(2)}%，
+                    交易量较前一周期显著增加，表明市场对该代币的兴趣正在快速增长。技术指标显示短期内可能继续保持强势，但也存在回调风险。
+                `;
+                riskWarning = `
+                    尽管短期趋势极为看好，但如此剧烈的上涨往往伴随着高风险。建议投资者保持谨慎，可能的情况下设置止盈位以保护利润。
+                    同时密切关注市场情绪变化和大户资金流向，以防突发回调。
+                `;
+            } else if (token.priceChangePercent > 5) {
+                marketAnalysis = `
+                    ${token.symbol}在过去24小时内表现稳健，价格上涨了${token.priceChangePercent.toFixed(2)}%。交易量呈现稳定增长，
+                    表明市场对该代币的信心正在增强。价格突破了多个关键阻力位，短期内可能继续上行，但涨幅可能会逐渐收窄。
+                `;
+                riskWarning = `
+                    当前涨幅较为健康，但仍建议设置合理的止损位。市场整体波动较大，相关政策和新闻可能对价格产生重大影响。
+                    建议分散投资，不要将过多资金集中在单一资产上。
+                `;
+            } else if (token.priceChangePercent > -5) {
+                marketAnalysis = `
+                    ${token.symbol}在过去24小时内价格波动相对温和，涨跌幅为${token.priceChangePercent.toFixed(2)}%。
+                    交易量保持稳定，市场情绪偏向中性。价格在近期支撑位和阻力位之间震荡，短期内可能继续盘整。
+                `;
+                riskWarning = `
+                    虽然当前波动不大，但加密货币市场随时可能出现剧烈波动。建议保持警惕，密切关注市场动态和相关新闻。
+                    避免在波动加剧时做出情绪化决策，坚持既定的投资策略。
+                `;
+            } else if (token.priceChangePercent > -15) {
+                marketAnalysis = `
+                    ${token.symbol}在过去24小时内出现了一定程度的回调，价格下跌了${Math.abs(token.priceChangePercent).toFixed(2)}%。
+                    交易量有所增加，表明抛压正在释放。价格接近关键支撑位，短期内可能会有反弹，但整体趋势偏弱。
+                `;
+                riskWarning = `
+                    当前价格处于下行趋势，建议谨慎操作。可能的情况下等待价格企稳后再考虑入场。
+                    设置严格的止损位，避免进一步损失。关注大资金流向和市场情绪变化，警惕恐慌性抛售。
+                `;
+            } else {
+                marketAnalysis = `
+                    ${token.symbol}在过去24小时内遭遇了严重抛压，价格暴跌${Math.abs(token.priceChangePercent).toFixed(2)}%。
+                    交易量大幅增加，表明市场恐慌情绪浓厚。价格跌破多个关键支撑位，短期内可能继续下探。
+                `;
+                riskWarning = `
+                    当前风险极高，强烈建议谨慎操作。避免在下跌过程中盲目抄底，可能还有进一步下跌空间。
+                    密切关注市场情绪和大户资金动向，等待明确的企稳信号。保护好资金安全是当前首要任务。
+                `;
+            }
+            
+            // 根据代币类型添加特定分析
+            if (token.type === 'alpha') {
+                marketAnalysis += `
+                    作为Alpha代币，${token.symbol}具有较高的成长性和创新性，但同时也伴随着更高的风险。
+                    项目基本面和技术发展是影响长期价值的关键因素，建议投资者深入研究项目背景和团队实力。
+                `;
+                riskWarning += `
+                    Alpha代币波动性通常较大，价格可能在短时间内出现大幅波动。建议只投入能够承受全部损失的资金，
+                    避免使用过高杠杆，防范清算风险。
+                `;
+            } else if (token.type === 'futures') {
+                marketAnalysis += `
+                    作为合约交易品种，${token.symbol}的价格受到现货市场和市场情绪的双重影响。
+                    当前市场杠杆水平和资金费率是判断短期走势的重要指标。
+                `;
+                riskWarning += `
+                    合约交易具有杠杆效应，收益和风险都被放大。当前市场波动较大，建议控制仓位，
+                    避免在高波动期使用过高杠杆，防范强制平仓风险。
+                `;
+            }
+            
+            marketAnalysisEl.textContent = marketAnalysis;
+            riskWarningEl.textContent = riskWarning;
+        }
+        
+        // 创建详细图表
+        function createDetailChart(token) {
+            const ctx = document.getElementById('detail-chart').getContext('2d');
+            
+            // 销毁旧图表
+            if (detailChart) {
+                detailChart.destroy();
+            }
+            
+            // 生成时间标签
+            const timeLabels = [];
+            const now = new Date();
+            for (let i = 23; i >= 0; i--) {
+                const time = new Date(now);
+                time.setHours(now.getHours() - i);
+                timeLabels.push(time.getHours() + ':00');
+            }
+            
+            // 创建新图表
+            detailChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: timeLabels,
+                    datasets: [{
+                        label: '价格 (USDT)',
+                        data: token.priceHistory,
+                        borderColor: token.priceChangePercent >= 0 ? '#10B981' : '#EF4444',
+                        backgroundColor: token.priceChangePercent >= 0 
+                            ? 'rgba(16, 185, 129, 0.1)' 
+                            : 'rgba(239, 68, 68, 0.1)',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: isDarkMode ? '#1E293B' : '#F1F5F9',
+                            titleColor: isDarkMode ? '#F1F5F9' : '#1E293B',
+                            bodyColor: isDarkMode ? '#CBD5E1' : '#475569',
+                            borderColor: isDarkMode ? '#334155' : '#E2E8F0',
+                            borderWidth: 1,
+                            padding: 10,
+                            displayColors: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return `价格: ${formatPrice(context.raw)} USDT`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            grid: {
+                                color: isDarkMode ? 'rgba(148, 163, 184, 0.1)' : 'rgba(100, 116, 139, 0.1)'
+                            },
+                            ticks: {
+                                color: isDarkMode ? '#94A3B8' : '#64748B',
+                                callback: function(value) {
+                                    return formatPrice(value);
+                                }
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                color: isDarkMode ? '#94A3B8' : '#64748B',
+                                maxRotation: 0,
+                                autoSkip: true,
+                                maxTicksLimit: 12
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 设置事件监听器
+        function setupEventListeners() {
+            // 代币类型筛选按钮
+            document.querySelectorAll('.token-type-filter').forEach(button => {
+                button.addEventListener('click', function() {
+                    const type = this.dataset.type;
+                    
+                    // 切换选中状态
+                    this.classList.toggle('filter-active');
+                    
+                    // 更新选中的代币类型
+                    if (this.classList.contains('filter-active')) {
+                        if (!selectedTokenTypes.includes(type)) {
+                            selectedTokenTypes.push(type);
+                        }
+                    } else {
+                        selectedTokenTypes = selectedTokenTypes.filter(t => t !== type);
+                    }
+                    
+                    // 重新渲染表格
+                    currentPage = 1;
+                    renderTokensTable();
+                });
+            });
+            
+            // 应用筛选按钮
+            document.getElementById('apply-filters').addEventListener('click', function() {
+                currentPage = 1;
+                renderTokensTable();
+            });
+            
+            // 重置筛选按钮
+            document.getElementById('reset-filters').addEventListener('click', function() {
+                // 重置代币类型
+                selectedTokenTypes = ['spot', 'futures', 'alpha'];
+                document.querySelectorAll('.token-type-filter').forEach(button => {
+                    button.classList.add('filter-active');
+                });
+                
+                // 重置涨跌幅范围
+                document.getElementById('min-change').value = '';
+                document.getElementById('max-change').value = '';
+                
+                // 重置价格范围
+                document.getElementById('min-price').value = '';
+                document.getElementById('max-price').value = '';
+                
+                // 重置交易量范围
+                document.getElementById('min-volume').value = '';
+                document.getElementById('max-volume').value = '';
+                
+                // 重置搜索框
+                document.getElementById('search-input').value = '';
+                
+                // 重新渲染表格
+                currentPage = 1;
+                renderTokensTable();
+            });
+            
+            // 排序选择
+            document.getElementById('sort-select').addEventListener('change', function() {
+                renderTokensTable();
+            });
+            
+            // 搜索输入
+            document.getElementById('search-input').addEventListener('input', debounce(function() {
+                currentPage = 1;
+                renderTokensTable();
+            }, 300));
+            
+            // 分页按钮
+            document.getElementById('prev-page').addEventListener('click', function() {
+                if (currentPage > 1) {
+                    currentPage--;
+                    renderTokensTable();
+                }
+            });
+            
+            document.getElementById('next-page').addEventListener('click', function() {
+                const totalPages = Math.ceil(filteredTokens.length / itemsPerPage);
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    renderTokensTable();
+                }
+            });
+            
+            // 关闭模态框按钮
+            document.getElementById('close-modal').addEventListener('click', function() {
+                document.getElementById('modal-token').classList.add('hidden');
+            });
+            
+            document.getElementById('close-modal-btn').addEventListener('click', function() {
+                document.getElementById('modal-token').classList.add('hidden');
+            });
+            
+            // 点击模态框背景关闭
+            document.getElementById('token-modal').addEventListener('click', function(e) {
+                if (e.target === this) {
+                    this.classList.add('hidden');
+                }
+            });
+            
+            // 时间范围按钮
+            document.querySelectorAll('.time-range-btn').forEach(button => {
+                button.addEventListener('click', function() {
+                    // 移除所有按钮的活动状态
+                    document.querySelectorAll('.time-range-btn').forEach(btn => {
+                        btn.classList.remove('bg-accent');
+                        btn.classList.add('bg-gray-700');
+                    });
+                    
+                    // 添加当前按钮的活动状态
+                    this.classList.remove('bg-gray-700');
+                    this.classList.add('bg-accent');
+                    
+                    // 获取选中的代币
+                    const symbol = document.getElementById('modal-symbol').textContent;
+                    const token = tokensData.find(t => t.symbol === symbol);
+                    
+                    if (token) {
+                        // 更新图表时间范围
+                        updateDetailChartTimeRange(this.dataset.range, token);
+                    }
+                });
+            });
+            
+            // 刷新按钮
+            document.getElementById('refresh-btn').addEventListener('click', function() {
+                // 添加旋转动画
+                const icon = this.querySelector('i');
+                icon.classList.add('fa-spin');
+                
+                // 刷新数据
+                refreshData();
+                
+                // 移除旋转动画
+                setTimeout(() => {
+                    icon.classList.remove('fa-spin');
+                }, 1000);
+            });
+            
+            // 通知按钮
+            document.getElementById('notifications-btn').addEventListener('click', function() {
+                try {
+                    // 标记所有通知为已读
+                    markAllNotificationsAsRead();
+                    // 跳转到通知历史页面
+                    window.location.href = 'notifications.html';
+                } catch (error) {
+                    console.error('通知按钮点击事件出错:', error);
+                }
+            });
+            
+
+            
+            // 主题切换按钮
+            document.getElementById('theme-toggle').addEventListener('click', function() {
+                toggleTheme();
+            });
+            
+            // 保存通知设置
+            document.getElementById('save-notification-settings').addEventListener('click', function() {
+                saveNotificationSettings();
+            });
+            
+            // 添加筛选条件
+            document.getElementById('add-condition-btn').addEventListener('click', function() {
+                addCondition();
+            });
+            
+            // 推送渠道切换
+            document.getElementById('push-channel').addEventListener('change', function() {
+                handlePushChannelChange(this.value);
+            });
+            
+            // 保存推送设置
+            document.getElementById('save-push-settings').addEventListener('click', function() {
+                savePushSettings();
+            });
+            
+            // 测试推送
+            document.getElementById('test-push').addEventListener('click', function() {
+                // 先保存设置
+                savePushSettings();
+                
+                // 发送测试消息
+                const testTitle = '🔔 推送测试';
+                const testBody = '如果您看到此消息，说明推送通知配置成功！\n\n来自：币安代币监控看板';
+                
+                if (!pushSettings.enabled) {
+                    alert('请先启用推送开关');
+                    return;
+                }
+                
+                if (!pushSettings.channel || !pushSettings.key) {
+                    alert('请先配置推送渠道和密钥');
+                    return;
+                }
+                
+                pushNotification(testTitle, testBody, { symbol: 'TEST', type: 'test', price: 0 });
+                updateConnectionStatus('测试推送已发送', 'success');
+            });
+            
+            // 标签页切换 - 币安代币
+            document.getElementById('tab-binance').addEventListener('click', function() {
+                document.getElementById('binance-content').style.display = 'flex';
+                document.getElementById('onchain-content').style.display = 'none';
+                this.classList.add('border-accent', 'text-accent');
+                this.classList.remove('border-transparent', 'text-gray-400');
+                document.getElementById('tab-onchain').classList.remove('border-accent', 'text-accent');
+                document.getElementById('tab-onchain').classList.add('border-transparent', 'text-gray-400');
+            });
+            
+            // 标签页切换 - 链上代币
+            document.getElementById('tab-onchain').addEventListener('click', function() {
+                document.getElementById('binance-content').style.display = 'none';
+                document.getElementById('onchain-content').style.display = 'flex';
+                this.classList.add('border-accent', 'text-accent');
+                this.classList.remove('border-transparent', 'text-gray-400');
+                document.getElementById('tab-binance').classList.remove('border-accent', 'text-accent');
+                document.getElementById('tab-binance').classList.add('border-transparent', 'text-gray-400');
+            });
+            
+            // 链上代币搜索
+            document.getElementById('onchain-search-input').addEventListener('input', debounce(function() {
+                renderOnchainTable();
+            }, 300));
+            
+            // 链上代币刷新
+            document.getElementById('refresh-onchain').addEventListener('click', function() {
+                const icon = this.querySelector('i');
+                icon.classList.add('fa-spin');
+                fetchOnchainTokens().finally(() => {
+                    setTimeout(() => icon.classList.remove('fa-spin'), 1000);
+                });
+            });
+            
+            // 表头排序
+            document.querySelectorAll('.sortable-header').forEach(header => {
+                header.addEventListener('click', function() {
+                    const sortField = this.dataset.sort;
+                    const sortSelect = document.getElementById('sort-select');
+                    
+                    // 获取当前排序方式
+                    const currentSort = sortSelect.value;
+                    const [currentField, currentOrder] = currentSort.split('-');
+                    
+                    // 如果点击的是当前排序字段，则切换排序顺序
+                    if (currentField === sortField) {
+                        const newOrder = currentOrder === 'asc' ? 'desc' : 'asc';
+                        sortSelect.value = `${sortField}-${newOrder}`;
+                    } else {
+                        // 否则，使用默认排序顺序
+                        const defaultOrder = sortField === 'price' || sortField === 'priceChangePercent' || sortField === 'volume' 
+                            ? 'desc' 
+                            : 'asc';
+                        sortSelect.value = `${sortField}-${defaultOrder}`;
+                    }
+                    
+                    // 重新渲染表格
+                    renderTokensTable();
+                });
+            });
+        }
+        
+        // 更新详细图表时间范围
+        function updateDetailChartTimeRange(range, token) {
+            // 销毁旧图表
+            if (detailChart) {
+                detailChart.destroy();
+            }
+            
+            let dataPoints, timeInterval, labelFormat;
+            
+            // 根据选择的范围设置参数
+            switch (range) {
+                case '1h':
+                    dataPoints = 60;
+                    timeInterval = 'minute';
+                    labelFormat = 'mm:ss';
+                    break;
+                case '24h':
+                    dataPoints = 24;
+                    timeInterval = 'hour';
+                    labelFormat = 'HH:00';
+                    break;
+                case '7d':
+                    dataPoints = 7;
+                    timeInterval = 'day';
+                    labelFormat = 'MM/dd';
+                    break;
+                case '30d':
+                    dataPoints = 30;
+                    timeInterval = 'day';
+                    labelFormat = 'MM/dd';
+                    break;
+                default:
+                    dataPoints = 24;
+                    timeInterval = 'hour';
+                    labelFormat = 'HH:00';
+            }
+            
+            // 生成新的价格历史数据（模拟）
+            let newPriceHistory = [];
+            let basePrice = token.price;
+            
+            if (range === '1h') {
+                // 1小时数据，使用更细粒度的波动
+                for (let i = 0; i < dataPoints; i++) {
+                    const change = basePrice * (Math.random() * 0.01 - 0.005);
+                    basePrice += change;
+                    newPriceHistory.push(Math.max(basePrice, 0.0001));
+                }
+            } else if (range === '24h') {
+                // 24小时数据，使用已有的数据
+                newPriceHistory = [...token.priceHistory];
+            } else {
+                // 7天或30天数据，使用更大的波动
+                for (let i = 0; i < dataPoints; i++) {
+                    const change = basePrice * (Math.random() * 0.05 - 0.025);
+                    basePrice += change;
+                    newPriceHistory.push(Math.max(basePrice, 0.0001));
+                }
+            }
+            
+            // 生成时间标签
+            const timeLabels = [];
+            const now = new Date();
+            
+            for (let i = dataPoints - 1; i >= 0; i--) {
+                const time = new Date(now);
+                
+                if (timeInterval === 'minute') {
+                    time.setMinutes(now.getMinutes() - i);
+                } else if (timeInterval === 'hour') {
+                    time.setHours(now.getHours() - i);
+                } else if (timeInterval === 'day') {
+                    time.setDate(now.getDate() - i);
+                }
+                
+                if (labelFormat === 'mm:ss') {
+                    timeLabels.push(time.getMinutes().toString().padStart(2, '0') + ':' + 
+                                   time.getSeconds().toString().padStart(2, '0'));
+                } else if (labelFormat === 'HH:00') {
+                    timeLabels.push(time.getHours().toString().padStart(2, '0') + ':00');
+                } else if (labelFormat === 'MM/dd') {
+                    timeLabels.push((time.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                                   time.getDate().toString().padStart(2, '0'));
+                }
+            }
+            
+            // 创建新图表
+            const ctx = document.getElementById('detail-chart').getContext('2d');
+            detailChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: timeLabels,
+                    datasets: [{
+                        label: '价格 (USDT)',
+                        data: newPriceHistory,
+                        borderColor: token.priceChangePercent >= 0 ? '#10B981' : '#EF4444',
+                        backgroundColor: token.priceChangePercent >= 0 
+                            ? 'rgba(16, 185, 129, 0.1)' 
+                            : 'rgba(239, 68, 68, 0.1)',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: isDarkMode ? '#1E293B' : '#F1F5F9',
+                            titleColor: isDarkMode ? '#F1F5F9' : '#1E293B',
+                            bodyColor: isDarkMode ? '#CBD5E1' : '#475569',
+                            borderColor: isDarkMode ? '#334155' : '#E2E8F0',
+                            borderWidth: 1,
+                            padding: 10,
+                            displayColors: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return `价格: ${formatPrice(context.raw)} USDT`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            grid: {
+                                color: isDarkMode ? 'rgba(148, 163, 184, 0.1)' : 'rgba(100, 116, 139, 0.1)'
+                            },
+                            ticks: {
+                                color: isDarkMode ? '#94A3B8' : '#64748B',
+                                callback: function(value) {
+                                    return formatPrice(value);
+                                }
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                color: isDarkMode ? '#94A3B8' : '#64748B',
+                                maxRotation: 0,
+                                autoSkip: true,
+                                maxTicksLimit: range === '30d' ? 10 : 12
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 刷新数据（重新连接WebSocket）
+        function refreshData() {
+            // 添加旋转动画
+            const icon = document.querySelector('#refresh-btn i');
+            icon.classList.add('fa-spin');
+            
+            // 关闭现有连接
+            if (spotWebSocket) {
+                spotWebSocket.close();
+            }
+            if (futuresWebSocket) {
+                futuresWebSocket.close();
+            }
+            
+            // 重新连接
+            connectToBinanceWS();
+            
+            // 移除旋转动画
+            setTimeout(() => {
+                icon.classList.remove('fa-spin');
+            }, 1000);
+        }
+        
+        // 更新最后更新时间
+        function updateLastUpdateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString();
+            document.getElementById('last-update-time').textContent = timeString;
+        }
+        
+        // 切换主题
+        function toggleTheme() {
+            isDarkMode = !isDarkMode;
+            
+            const body = document.body;
+            const themeToggle = document.getElementById('theme-toggle');
+            const icon = themeToggle.querySelector('i');
+            
+            if (isDarkMode) {
+                // 深色模式
+                body.classList.remove('bg-light', 'text-dark');
+                body.classList.add('bg-secondary', 'text-light');
+                
+                icon.classList.remove('fa-sun-o');
+                icon.classList.add('fa-moon-o');
+                
+                // 更新图表主题
+                updateChartsTheme();
+            } else {
+                // 浅色模式
+                body.classList.remove('bg-secondary', 'text-light');
+                body.classList.add('bg-light', 'text-dark');
+                
+                icon.classList.remove('fa-moon-o');
+                icon.classList.add('fa-sun-o');
+                
+                // 更新图表主题
+                updateChartsTheme();
+            }
+        }
+        
+        // 更新图表主题
+        function updateChartsTheme() {
+            const textColor = isDarkMode ? '#F1F5F9' : '#1E293B';
+            const gridColor = isDarkMode ? 'rgba(148, 163, 184, 0.1)' : 'rgba(100, 116, 139, 0.1)';
+            const axisColor = isDarkMode ? '#94A3B8' : '#64748B';
+            
+            // 更新详细图表（如果存在）
+            if (detailChart) {
+                detailChart.options.plugins.tooltip.backgroundColor = isDarkMode ? '#1E293B' : '#F1F5F9';
+                detailChart.options.plugins.tooltip.titleColor = isDarkMode ? '#F1F5F9' : '#1E293B';
+                detailChart.options.plugins.tooltip.bodyColor = isDarkMode ? '#CBD5E1' : '#475569';
+                detailChart.options.plugins.tooltip.borderColor = isDarkMode ? '#334155' : '#E2E8F0';
+                detailChart.options.scales.y.ticks.color = axisColor;
+                detailChart.options.scales.y.grid.color = gridColor;
+                detailChart.options.scales.x.ticks.color = axisColor;
+                detailChart.update();
+            }
+        }
+        
+        // 更新底部价格显示
+        function updateBottomPrices() {
+            const mainTokens = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+            
+            mainTokens.forEach(symbol => {
+                const token = tokensData.find(t => t.symbol === symbol);
+                const priceElement = document.getElementById(symbol.toLowerCase().replace('usdt', '-price'));
+                
+                if (token && priceElement) {
+                    console.log(`处理${symbol}数据:`);
+                    console.log('当前价格:', token.price);
+                    
+                    // 更新价格（BTC和ETH使用K单位）
+                    const formattedPrice = formatPriceWithUnit(token.price, symbol);
+                    priceElement.textContent = formattedPrice;
+                    
+                    // 添加价格闪烁效果
+                    priceElement.classList.add('price-up-flash');
+                    setTimeout(() => {
+                        priceElement.classList.remove('price-up-flash');
+                    }, 300);
+                } else {
+                    console.warn(`未找到${symbol}的数据或元素`);
+                }
+            });
+        }
+        
+        // 计算1小时涨跌幅
+        function calculateOneHourChange(priceHistory) {
+            if (!priceHistory || priceHistory.length < 2) {
+                return 0;
+            }
+            
+            // 使用最近的价格点计算涨跌幅
+            // 假设每小时一个数据点，使用最后一个和倒数第二个数据点
+            const currentPrice = priceHistory[priceHistory.length - 1];
+            const previousPrice = priceHistory[priceHistory.length - 2] || priceHistory[0];
+            
+            if (previousPrice === 0) {
+                return 0;
+            }
+            
+            return ((currentPrice - previousPrice) / previousPrice) * 100;
+        }
+        
+        // 格式化价格（支持K单位）
+        function formatPriceWithUnit(price, symbol) {
+            // BTC和ETH使用K单位
+            if (['BTCUSDT', 'ETHUSDT'].includes(symbol)) {
+                if (price >= 1000) {
+                    return (price / 1000).toFixed(2) + 'K';
+                }
+            }
+            
+            // 其他代币使用标准格式
+            return formatPrice(price);
+        }
+
+        // 格式化价格
+        function formatPrice(price) {
+            if (price >= 1000) {
+                return price.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                });
+            } else if (price >= 1) {
+                return price.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 4
+                });
+            } else {
+                return price.toLocaleString('en-US', {
+                    minimumFractionDigits: 4,
+                    maximumFractionDigits: 8
+                });
+            }
+        }
+        
+        // 格式化交易量
+        function formatVolume(volume) {
+            if (volume >= 1000000) {
+                return (volume / 1000000).toFixed(2) + 'M';
+            } else if (volume >= 1000) {
+                return (volume / 1000).toFixed(2) + 'K';
+            } else {
+                return volume.toFixed(2);
+            }
+        }
+        
+        // 获取代币类型颜色类
+        function getTypeColorClass(type) {
+            switch (type) {
+                case 'spot':
+                    return 'bg-blue-500/20 text-blue-400';
+                case 'futures':
+                    return 'bg-green-500/20 text-green-400';
+                case 'alpha':
+                    return 'bg-yellow-500/20 text-yellow-400';
+                default:
+                    return 'bg-gray-500/20 text-gray-400';
+            }
+        }
+        
+        // 防抖函数
+        function debounce(func, wait) {
+            let timeout;
+            return function() {
+                const context = this;
+                const args = arguments;
+                clearTimeout(timeout);
+                timeout = setTimeout(() => {
+                    func.apply(context, args);
+                }, wait);
+            };
+        }
+    </script>
+    
+
+</body>
+</html>

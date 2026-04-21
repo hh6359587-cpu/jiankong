@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试模拟数据加载</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold mb-6">测试模拟数据加载</h1>
+        
+        <div class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">数据统计</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-gray-700 p-4 rounded-lg">
+                    <div class="text-gray-400 text-sm">总代币数</div>
+                    <div id="total-count" class="text-2xl font-bold">0</div>
+                </div>
+                <div class="bg-blue-900/30 p-4 rounded-lg">
+                    <div class="text-gray-400 text-sm">现货代币</div>
+                    <div id="spot-count" class="text-2xl font-bold">0</div>
+                </div>
+                <div class="bg-yellow-900/30 p-4 rounded-lg">
+                    <div class="text-gray-400 text-sm">Alpha代币</div>
+                    <div id="alpha-count" class="text-2xl font-bold">0</div>
+                </div>
+                <div class="bg-green-900/30 p-4 rounded-lg">
+                    <div class="text-gray-400 text-sm">合约代币</div>
+                    <div id="futures-count" class="text-2xl font-bold">0</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h2 class="text-xl font-semibold mb-4">代币列表</h2>
+            <div id="tokens-list" class="space-y-2 max-h-96 overflow-y-auto">
+                <div class="text-gray-500 text-center py-8">
+                    正在加载数据...
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-6">
+            <button id="load-mock-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium">
+                重新加载模拟数据
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // 模拟数据
+        const mockSpotData = [
+            {s: 'BTCUSDT', c: '42500.00', P: '5.23', p: '2125.00', o: '40375.00', h: '43200.00', l: '41000.25', v: '12500750'},
+            {s: 'ETHUSDT', c: '2350.00', P: '3.45', p: '78.25', o: '2271.75', h: '2380.50', l: '2250.00', v: '8750320'},
+            {s: 'BNBUSDT', c: '315.75', P: '-2.15', p: '-6.95', o: '322.70', h: '325.00', l: '310.25', v: '4250180'},
+            {s: 'SOLUSDT', c: '125.30', P: '8.75', p: '10.05', o: '115.25', h: '128.50', l: '114.80', v: '6320750'},
+            {s: 'ADAUSDT', c: '0.4567', P: '1.25', p: '0.0056', o: '0.4511', h: '0.4620', l: '0.4485', v: '3150220'}
+        ];
+
+        const mockAlphaData = [
+            {s: 'APTUSDT', c: '8.25', P: '12.34', p: '0.92', o: '7.33', h: '8.50', l: '7.25', v: '2150380'},
+            {s: 'SEIUSDT', c: '0.8567', P: '15.67', p: '0.1167', o: '0.7400', h: '0.8800', l: '0.7350', v: '1850420'},
+            {s: 'SUIUSDT', c: '1.25', P: '-8.56', p: '-0.12', o: '1.37', h: '1.38', l: '1.22', v: '2350780'},
+            {s: 'NEARUSDT', c: '3.45', P: '5.82', p: '0.19', o: '3.26', h: '3.52', l: '3.20', v: '1650320'},
+            {s: 'AXSUSDT', c: '6.75', P: '-3.25', p: '-0.23', o: '6.98', h: '7.05', l: '6.65', v: '1250890'}
+        ];
+
+        const mockFuturesData = [
+            {s: 'BTCUSDT', c: '42550.00', P: '5.35', p: '2150.00', o: '40400.00', h: '43250.00', l: '41050.00', v: '18750320'},
+            {s: 'ETHUSDT', c: '2355.00', P: '3.58', p: '80.50', o: '2274.50', h: '2385.00', l: '2255.00', v: '12350780'},
+            {s: 'BNBUSDT', c: '316.25', P: '-2.05', p: '-6.65', o: '322.90', h: '325.50', l: '310.75', v: '6850240'},
+            {s: 'SOLUSDT', c: '125.75', P: '8.95', p: '10.25', o: '115.50', h: '129.00', l: '115.20', v: '9450320'},
+            {s: 'ADAUSDT', c: '0.4575', P: '1.35', p: '0.0060', o: '0.4515', h: '0.4625', l: '0.4490', v: '4950380'}
+        ];
+
+        let allTokens = [];
+
+        // 加载模拟数据
+        function loadMockData() {
+            console.log('开始加载模拟数据...');
+            
+            // 清空现有数据
+            allTokens = [];
+            
+            // 处理现货数据
+            mockSpotData.forEach(item => {
+                processTokenData(item, 'spot');
+            });
+            
+            // 处理Alpha数据
+            mockAlphaData.forEach(item => {
+                processTokenData(item, 'alpha');
+            });
+            
+            // 处理合约数据
+            mockFuturesData.forEach(item => {
+                processTokenData(item, 'futures');
+            });
+            
+            console.log('模拟数据加载完成');
+            console.log('总代币数:', allTokens.length);
+            console.log('现货代币:', allTokens.filter(t => t.type === 'spot').length);
+            console.log('Alpha代币:', allTokens.filter(t => t.type === 'alpha').length);
+            console.log('合约代币:', allTokens.filter(t => t.type === 'futures').length);
+            
+            // 更新显示
+            updateDisplay();
+        }
+
+        // 处理代币数据
+        function processTokenData(item, tokenType) {
+            try {
+                // 确保必要字段存在
+                if (!item.s || !item.c || !item.P || !item.o || !item.h || !item.l || !item.v) {
+                    console.warn('跳过缺少必要字段的数据项:', item.s);
+                    return;
+                }
+                
+                // 创建代币数据
+                const tokenData = {
+                    symbol: item.s,
+                    type: tokenType,
+                    price: parseFloat(item.c),
+                    priceChangePercent: parseFloat(item.P),
+                    volume: parseFloat(item.v),
+                    highPrice: parseFloat(item.h),
+                    lowPrice: parseFloat(item.l),
+                    openPrice: parseFloat(item.o),
+                    updateTime: new Date().getTime()
+                };
+                
+                allTokens.push(tokenData);
+                console.log('添加代币:', item.s, '类型:', tokenType);
+                
+            } catch (error) {
+                console.error('处理单个代币时出错:', error);
+                console.error('问题数据项:', item);
+            }
+        }
+
+        // 更新显示
+        function updateDisplay() {
+            // 更新统计信息
+            document.getElementById('total-count').textContent = allTokens.length;
+            document.getElementById('spot-count').textContent = allTokens.filter(t => t.type === 'spot').length;
+            document.getElementById('alpha-count').textContent = allTokens.filter(t => t.type === 'alpha').length;
+            document.getElementById('futures-count').textContent = allTokens.filter(t => t.type === 'futures').length;
+            
+            // 更新代币列表
+            const tokensList = document.getElementById('tokens-list');
+            tokensList.innerHTML = '';
+            
+            if (allTokens.length === 0) {
+                tokensList.innerHTML = `
+                    <div class="text-gray-500 text-center py-8">
+                        没有数据
+                    </div>
+                `;
+                return;
+            }
+            
+            allTokens.forEach(token => {
+                const typeColors = {
+                    'spot': 'bg-blue-900/30',
+                    'alpha': 'bg-yellow-900/30',
+                    'futures': 'bg-green-900/30'
+                };
+                
+                const typeNames = {
+                    'spot': '现货',
+                    'alpha': 'Alpha',
+                    'futures': '合约'
+                };
+                
+                const changeColor = token.priceChangePercent >= 0 ? 'text-green-400' : 'text-red-400';
+                const changeIcon = token.priceChangePercent >= 0 ? '↑' : '↓';
+                
+                const tokenEl = document.createElement('div');
+                tokenEl.className = `flex justify-between items-center p-3 ${typeColors[token.type]} rounded-lg`;
+                tokenEl.innerHTML = `
+                    <div>
+                        <div class="font-medium">${token.symbol}</div>
+                        <div class="text-xs text-gray-400">${typeNames[token.type]}</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="font-mono">${token.price.toLocaleString()}</div>
+                        <div class="${changeColor} text-sm">${changeIcon} ${Math.abs(token.priceChangePercent).toFixed(2)}%</div>
+                    </div>
+                `;
+                
+                tokensList.appendChild(tokenEl);
+            });
+        }
+
+        // 页面加载完成后加载数据
+        document.addEventListener('DOMContentLoaded', function() {
+            loadMockData();
+            
+            // 绑定按钮事件
+            document.getElementById('load-mock-btn').addEventListener('click', function() {
+                this.disabled = true;
+                this.textContent = '加载中...';
+                
+                setTimeout(() => {
+                    loadMockData();
+                    this.disabled = false;
+                    this.textContent = '重新加载模拟数据';
+                }, 500);
+            });
+        });
+    </script>
+</body>
+</html>

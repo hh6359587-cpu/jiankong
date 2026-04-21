@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通知历史 - 币安代币监控看板</title>
+    <!-- Tailwind CSS v3 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <!-- 统一的 Tailwind 配置 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1E293B',
+                        secondary: '#0F172A',
+                        accent: '#3B82F6',
+                        success: '#10B981',
+                        danger: '#EF4444',
+                        warning: '#F59E0B',
+                        info: '#3B82F6',
+                        dark: '#0F172A',
+                        light: '#F1F5F9'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    }
+                }
+            },
+            darkMode: 'class'
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .scrollbar-hide::-webkit-scrollbar {
+                display: none;
+            }
+            .scrollbar-hide {
+                -ms-overflow-style: none;
+                scrollbar-width: none;
+            }
+        }
+    </style>
+</head>
+<body class="bg-secondary text-light antialiased min-h-screen">
+    <!-- 顶部导航栏 -->
+    <header class="bg-primary px-6 py-4 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="text-2xl font-bold text-white flex items-center">
+                <i class="fa fa-line-chart text-accent mr-2"></i>
+                <span>币安代币监控看板</span>
+            </div>
+            <div class="flex items-center space-x-4">
+                <a href="index.html" class="bg-accent hover:bg-blue-600 text-white px-4 py-2 rounded-md transition-colors">
+                    <i class="fa fa-arrow-left mr-1"></i> 返回主页
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <main class="max-w-7xl mx-auto px-6 py-8">
+        <!-- 页面标题 -->
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold text-white flex items-center">
+                <i class="fa fa-bell text-accent mr-3"></i>通知历史
+            </h1>
+            <p class="text-gray-400 mt-2">查看所有历史通知记录</p>
+        </div>
+
+        <!-- 通知列表 -->
+        <div class="bg-primary rounded-lg shadow-lg overflow-hidden">
+            <!-- 通知列表头部 -->
+            <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-white">通知记录</h2>
+                <button id="clear-notifications" class="text-accent hover:text-blue-400 text-sm">
+                    <i class="fa fa-trash mr-1"></i> 清空历史
+                </button>
+            </div>
+
+            <!-- 通知列表内容 -->
+            <div id="notifications-list" class="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+                <div class="text-center text-gray-500 py-12">
+                    <i class="fa fa-bell-slash-o text-5xl mb-4"></i>
+                    <p class="text-xl">暂无通知记录</p>
+                    <p class="text-gray-400 mt-2">当市场出现重大波动时，这里会显示通知记录</p>
+                </div>
+            </div>
+
+            <!-- 通知列表底部 -->
+            <div class="p-4 border-t border-gray-700 flex justify-between items-center">
+                <span class="text-sm text-gray-400" id="notifications-count">0 条通知</span>
+                <span class="text-sm text-gray-500">最后更新: <span id="last-update-time"></span></span>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // 全局变量
+        let notificationsHistory = [];
+        
+        // 代币类型映射
+        const tokenTypeMap = {
+            'spot': '现货',
+            'futures': '合约',
+            'alpha': 'Alpha'
+        };
+
+        // 初始化函数
+        document.addEventListener('DOMContentLoaded', function() {
+            loadNotificationsHistory();
+            renderNotificationsHistory();
+            updateLastUpdateTime();
+            
+            // 绑定清空通知按钮事件
+            document.getElementById('clear-notifications').addEventListener('click', function() {
+                if (confirm('确定要清空所有通知历史吗？')) {
+                    clearNotificationsHistory();
+                }
+            });
+        });
+
+        // 从本地存储加载通知历史
+        function loadNotificationsHistory() {
+            try {
+                const data = localStorage.getItem('binanceNotifications');
+                if (data) {
+                    const parsed = JSON.parse(data);
+                    notificationsHistory = parsed.history || [];
+                }
+            } catch (error) {
+                console.error('加载通知历史失败:', error);
+            }
+        }
+
+        // 渲染通知历史
+        function renderNotificationsHistory() {
+            const notificationsList = document.getElementById('notifications-list');
+            const notificationsCount = document.getElementById('notifications-count');
+            
+            if (notificationsHistory.length === 0) {
+                notificationsList.innerHTML = `
+                    <div class="text-center text-gray-500 py-12">
+                        <i class="fa fa-bell-slash-o text-5xl mb-4"></i>
+                        <p class="text-xl">暂无通知记录</p>
+                        <p class="text-gray-400 mt-2">当市场出现重大波动时，这里会显示通知记录</p>
+                    </div>
+                `;
+                notificationsCount.textContent = '0 条通知';
+                return;
+            }
+            
+            notificationsList.innerHTML = notificationsHistory.map(notification => {
+                const date = new Date(notification.timestamp);
+                const timeString = date.toLocaleString('zh-CN');
+                const tokenType = tokenTypeMap[notification.type] || notification.type;
+                
+                return `
+                    <div class="bg-gray-800 rounded-lg p-4 border-l-4 ${notification.isUp ? 'border-success' : 'border-danger'}">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <div class="flex items-center mb-2">
+                                    <span class="text-lg font-semibold ${notification.isUp ? 'text-success' : 'text-danger'}">
+                                        ${notification.isUp ? '🚀' : '📉'} ${notification.symbol}
+                                    </span>
+                                    <span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-700">
+                                        ${tokenType}
+                                    </span>
+                                </div>
+                                <div class="text-sm text-gray-300 mb-2">
+                                    当前价格: $${notification.price.toFixed(4)}
+                                </div>
+                                <div class="text-sm ${notification.isUp ? 'text-success' : 'text-danger'}">
+                                    ${notification.isUp ? '上涨' : '下跌'}: ${Math.abs(notification.priceChangePercent).toFixed(2)}%
+                                </div>
+                            </div>
+                            <div class="text-xs text-gray-500">
+                                ${timeString}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            notificationsCount.textContent = `${notificationsHistory.length} 条通知`;
+        }
+
+        // 清空通知历史
+        function clearNotificationsHistory() {
+            notificationsHistory = [];
+            try {
+                localStorage.setItem('binanceNotifications', JSON.stringify({
+                    history: notificationsHistory,
+                    unread: 0
+                }));
+                renderNotificationsHistory();
+            } catch (error) {
+                console.error('清空通知历史失败:', error);
+            }
+        }
+
+        // 更新最后更新时间
+        function updateLastUpdateTime() {
+            const now = new Date();
+            document.getElementById('last-update-time').textContent = now.toLocaleString('zh-CN');
+        }
+    </script>
+</body>
+</html>

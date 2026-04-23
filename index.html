@@ -849,6 +849,53 @@
             return Boolean(symbol && excludedSymbols.has(symbol));
         }
 
+        function compareOnchainTokens(a, b) {
+            const trustedDiff = Number(b.marketCapSource === 'coingecko') - Number(a.marketCapSource === 'coingecko');
+            if (trustedDiff !== 0) return trustedDiff;
+
+            if (a.marketCapSource === 'coingecko' && b.marketCapSource === 'coingecko') {
+                const capDiff = getTokenMarketCap(b) - getTokenMarketCap(a);
+                if (capDiff !== 0) return capDiff;
+            }
+
+            const alertA = Math.max(
+                Math.abs(Number(a.priceChange && a.priceChange.m5 || 0)),
+                Math.abs(Number(a.priceChange && a.priceChange.h1 || 0)),
+                Math.abs(Number(a.priceChange && a.priceChange.h6 || 0)),
+                Math.abs(Number(a.priceChange && a.priceChange.h24 || 0))
+            );
+            const alertB = Math.max(
+                Math.abs(Number(b.priceChange && b.priceChange.m5 || 0)),
+                Math.abs(Number(b.priceChange && b.priceChange.h1 || 0)),
+                Math.abs(Number(b.priceChange && b.priceChange.h6 || 0)),
+                Math.abs(Number(b.priceChange && b.priceChange.h24 || 0))
+            );
+            if (alertB !== alertA) return alertB - alertA;
+
+            const volumeDiff = getTokenVolume24h(b) - getTokenVolume24h(a);
+            if (volumeDiff !== 0) return volumeDiff;
+
+            const liquidityDiff = getTokenLiquidity(b) - getTokenLiquidity(a);
+            if (liquidityDiff !== 0) return liquidityDiff;
+
+            return getTokenMarketCap(b) - getTokenMarketCap(a);
+        }
+
+        function dedupeOnchainTokens(tokens) {
+            const bySymbol = new Map();
+
+            for (const token of tokens || []) {
+                const symbol = getTokenSymbol(token);
+                if (!symbol) continue;
+                const existing = bySymbol.get(symbol);
+                if (!existing || compareOnchainTokens(token, existing) < 0) {
+                    bySymbol.set(symbol, token);
+                }
+            }
+
+            return Array.from(bySymbol.values()).sort(compareOnchainTokens);
+        }
+
         function updateOnchainUpdateLabel(payload, sourceLabel) {
             const timeEl = document.getElementById('onchain-update-time');
             if (!timeEl) return;
@@ -876,7 +923,7 @@
                 throw new Error('本地链上聚合器返回格式不正确');
             }
 
-            onchainTokens = payload.tokens;
+            onchainTokens = dedupeOnchainTokens(payload.tokens);
             updateOnchainPriceHistory();
             onchainFilteredTokens = [...onchainTokens];
             renderOnchainTable();
@@ -1363,16 +1410,7 @@
                     return getTokenLiquidity(b) - getTokenLiquidity(a);
                 });
 
-                const symbolSeen = new Set();
-                const dedupedTokens = [];
-                for (const token of onchainTokens) {
-                    const key = `${getTokenSymbol(token)}-${token.chainId}`;
-                    if (!symbolSeen.has(key)) {
-                        symbolSeen.add(key);
-                        dedupedTokens.push(token);
-                    }
-                }
-                onchainTokens = dedupedTokens;
+                onchainTokens = dedupeOnchainTokens(onchainTokens);
 
                 onchainFilteredTokens = [...onchainTokens];
                 renderOnchainTable();

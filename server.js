@@ -436,7 +436,7 @@ function filterAndRank(tokens, excludedSymbols) {
     merged.set(key, merged.has(key) ? mergeToken(merged.get(key), token) : token);
   }
 
-  const bySymbolChain = new Map();
+  const bySymbol = new Map();
   for (const token of merged.values()) {
     const marketCap = getMarketCap(token);
     const volume24h = getVolume24h(token);
@@ -446,14 +446,14 @@ function filterAndRank(tokens, excludedSymbols) {
     const isActiveCandidate = liquidity >= 100_000 && volume24h >= 25_000;
     if (!isHighMarketCap && !isActiveCandidate) continue;
 
-    const key = `${normalizeSymbol(token.baseToken?.symbol)}-${token.chainId}`;
-    const existing = bySymbolChain.get(key);
+    const key = normalizeSymbol(token.baseToken?.symbol);
+    const existing = bySymbol.get(key);
     if (!existing || compareTokens(token, existing) < 0) {
-      bySymbolChain.set(key, token);
+      bySymbol.set(key, token);
     }
   }
 
-  const ranked = Array.from(bySymbolChain.values()).sort(compareTokens);
+  const ranked = Array.from(bySymbol.values()).sort(compareTokens);
 
   return { tokens: ranked, binanceExcluded, platformExcluded, stableExcluded };
 }

@@ -111,6 +111,10 @@
 
         function formatNotificationCondition(condition) {
             if (!condition) return '默认条件';
+            if (condition.mode === 'group' && Array.isArray(condition.conditions)) {
+                const groupLabel = condition.groupIndex ? `规则组${condition.groupIndex}` : '规则组';
+                return `${groupLabel} AND ${condition.conditions.map(c => `${c.hours}h/${c.threshold}%`).join(' + ')}`;
+            }
             if (condition.mode === 'and' && Array.isArray(condition.conditions)) {
                 return `AND ${condition.conditions.map(c => `${c.hours}h/${c.threshold}%`).join(' + ')}`;
             }

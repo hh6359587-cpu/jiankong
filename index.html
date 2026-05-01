@@ -214,30 +214,32 @@
                         <i class="fa fa-bell text-accent mr-2"></i>通知设置（币安+链上）
                     </h2>
                     <div class="bg-gray-800 rounded-lg p-4">
-                        <!-- 条件逻辑 -->
-                        <div class="mb-3">
-                            <label class="block text-sm font-medium text-gray-400 mb-2">条件逻辑</label>
-                            <select id="notification-condition-mode" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm">
-                                <option value="or">OR：满足任一条件即通知</option>
-                                <option value="and">AND：全部条件都满足才通知</option>
-                            </select>
-                        </div>
                         <!-- 筛选条件列表 -->
                         <div class="mb-3">
-                            <label class="block text-sm font-medium text-gray-400 mb-2">筛选条件</label>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="block text-sm font-medium text-gray-400">通知规则组</label>
+                                <button id="add-condition-group-btn" class="bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded-md text-xs transition-colors">
+                                    <i class="fa fa-plus mr-1"></i>规则组
+                                </button>
+                            </div>
                             <div id="notification-conditions" class="space-y-2">
                                 <!-- 条件项会动态渲染 -->
                             </div>
                         </div>
                         <!-- 添加条件 -->
-                        <div class="flex space-x-2 mb-3">
-                            <input type="number" id="new-condition-hours" class="flex-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="小时" min="0.1" step="0.1">
-                            <span class="text-gray-400 self-center text-sm">h涨跌</span>
-                            <input type="number" id="new-condition-threshold" class="flex-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="阈值%" min="0.1" step="0.1">
-                            <span class="text-gray-400 self-center text-sm">%</span>
-                            <button id="add-condition-btn" class="bg-accent hover:bg-blue-600 text-white px-3 py-2 rounded-md text-sm transition-colors">
-                                <i class="fa fa-plus"></i>
-                            </button>
+                        <div class="space-y-2 mb-3">
+                            <select id="condition-group-select" class="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm">
+                                <option value="0">规则组 1</option>
+                            </select>
+                            <div class="grid grid-cols-[1fr_auto_1fr_auto_auto] gap-2 items-center">
+                                <input type="number" id="new-condition-hours" class="min-w-0 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="小时" min="0.1" step="0.1">
+                                <span class="text-gray-400 self-center text-sm">h</span>
+                                <input type="number" id="new-condition-threshold" class="min-w-0 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm" placeholder="阈值%" min="0.1" step="0.1">
+                                <span class="text-gray-400 self-center text-sm">%</span>
+                                <button id="add-condition-btn" class="bg-accent hover:bg-blue-600 text-white px-3 py-2 rounded-md text-sm transition-colors">
+                                    <i class="fa fa-plus"></i>
+                                </button>
+                            </div>
                         </div>
                         <!-- 保存设置按钮 -->
                         <button id="save-notification-settings" class="w-full bg-accent hover:bg-blue-600 text-white py-2 rounded-md transition-colors">
@@ -653,10 +655,9 @@
 
         // 通知相关变量
         let notificationPermission = 'default';
-        let notificationConditions = [
-            { hours: 1, threshold: 30 }
-        ];
-        let notificationConditionMode = 'or';
+        let notificationGroupIdSeq = 1;
+        let notificationConditionGroups = createDefaultNotificationGroups();
+        let notificationConditions = flattenNotificationGroups(notificationConditionGroups);
         let lastNotifications = {}; // 记录最近的通知，避免重复通知
         let notificationsHistory = []; // 通知历史记录
         let unreadNotifications = 0; // 未读通知数
@@ -1582,8 +1583,83 @@
             });
         }
 
+        function createNotificationGroupId() {
+            return `group-${Date.now()}-${notificationGroupIdSeq++}`;
+        }
+
+        function normalizeNotificationCondition(condition) {
+            const hours = Number(condition && condition.hours);
+            const threshold = Number(condition && condition.threshold);
+            if (!Number.isFinite(hours) || hours <= 0 || !Number.isFinite(threshold) || threshold <= 0) {
+                return null;
+            }
+            return { hours, threshold };
+        }
+
+        function createDefaultNotificationGroups() {
+            return [
+                {
+                    id: createNotificationGroupId(),
+                    conditions: [{ hours: 1, threshold: 30 }]
+                }
+            ];
+        }
+
+        function normalizeNotificationGroups(groups) {
+            if (!Array.isArray(groups)) return [];
+
+            return groups.map(group => {
+                const conditions = (Array.isArray(group && group.conditions) ? group.conditions : [])
+                    .map(normalizeNotificationCondition)
+                    .filter(Boolean);
+
+                return {
+                    id: group && group.id ? String(group.id) : createNotificationGroupId(),
+                    conditions
+                };
+            });
+        }
+
+        function migrateNotificationSettings(parsed) {
+            const rawGroups = parsed && Array.isArray(parsed.groups) ? parsed.groups : null;
+            if (rawGroups) {
+                const parsedGroups = normalizeNotificationGroups(rawGroups);
+                if (parsedGroups.length > 0) return parsedGroups;
+            }
+
+            const legacyConditions = (Array.isArray(parsed && parsed.conditions) ? parsed.conditions : [])
+                .map(normalizeNotificationCondition)
+                .filter(Boolean);
+            if (legacyConditions.length === 0) return createDefaultNotificationGroups();
+
+            if (parsed && parsed.mode === 'and') {
+                return [{ id: createNotificationGroupId(), conditions: legacyConditions }];
+            }
+
+            return legacyConditions.map(condition => ({
+                id: createNotificationGroupId(),
+                conditions: [condition]
+            }));
+        }
+
+        function flattenNotificationGroups(groups) {
+            return (groups || []).flatMap(group => group.conditions || []);
+        }
+
+        function syncNotificationConditionState() {
+            notificationConditionGroups = normalizeNotificationGroups(notificationConditionGroups);
+            if (notificationConditionGroups.length === 0) {
+                notificationConditionGroups = createDefaultNotificationGroups();
+            }
+            notificationConditions = flattenNotificationGroups(notificationConditionGroups);
+        }
+
         function formatNotificationCondition(condition) {
             if (!condition) return '默认条件';
+            if (condition.mode === 'group' && Array.isArray(condition.conditions)) {
+                const groupLabel = condition.groupIndex ? `规则组${condition.groupIndex}` : '规则组';
+                return `${groupLabel} AND ${condition.conditions.map(c => `${c.hours}h/${c.threshold}%`).join(' + ')}`;
+            }
             if (condition.mode === 'and' && Array.isArray(condition.conditions)) {
                 return `AND ${condition.conditions.map(c => `${c.hours}h/${c.threshold}%`).join(' + ')}`;
             }
@@ -1598,7 +1674,7 @@
             // 检查是否在最近5分钟内已经发送过该代币的通知
             const now = new Date().getTime();
             const conditionKey = condition
-                ? (condition.key || `${condition.hours || 'multi'}h-${condition.threshold || 'multi'}-${condition.mode || notificationConditionMode}`)
+                ? (condition.key || `${condition.hours || 'multi'}h-${condition.threshold || 'multi'}-${condition.mode || 'groups'}`)
                 : 'default';
             const notificationStore = options.notificationStore || lastNotifications;
             const notificationKey = `${options.keyPrefix || token.symbol}-${conditionKey}`;
@@ -1854,40 +1930,51 @@
         }
 
         function evaluateNotificationConditions(token) {
-            const conditions = notificationConditions.filter(condition => condition.hours > 0 && condition.threshold > 0);
-            if (conditions.length === 0) return null;
+            const groups = normalizeNotificationGroups(notificationConditionGroups);
+            if (groups.length === 0) return null;
 
-            const matches = [];
-            for (const condition of conditions) {
-                const changePercent = calcTimeRangeChange(token, condition.hours);
-                if (changePercent !== null && Math.abs(changePercent) >= condition.threshold) {
-                    matches.push({ condition, changePercent });
+            const groupMatches = [];
+            groups.forEach((group, groupIndex) => {
+                const conditions = group.conditions.filter(condition => condition.hours > 0 && condition.threshold > 0);
+                if (conditions.length === 0) return;
+
+                const matches = [];
+                for (const condition of conditions) {
+                    const changePercent = calcTimeRangeChange(token, condition.hours);
+                    if (changePercent !== null && Math.abs(changePercent) >= condition.threshold) {
+                        matches.push({ condition, changePercent });
+                    }
                 }
-            }
 
-            if (notificationConditionMode === 'and') {
-                if (matches.length !== conditions.length) return null;
+                if (matches.length !== conditions.length) return;
                 const direction = matches[0].changePercent >= 0 ? 1 : -1;
                 const sameDirection = matches.every(match => (match.changePercent >= 0 ? 1 : -1) === direction);
-                if (!sameDirection) return null;
+                if (!sameDirection) return;
+
                 const strongest = matches.reduce((best, item) =>
                     Math.abs(item.changePercent) > Math.abs(best.changePercent) ? item : best
                 );
-                return {
-                    changePercent: strongest.changePercent,
-                    condition: {
-                        mode: 'and',
-                        key: `and-${conditions.map(c => `${c.hours}h-${c.threshold}`).join('_')}`,
-                        conditions: conditions.map(c => ({ hours: c.hours, threshold: c.threshold }))
-                    }
-                };
-            }
+                groupMatches.push({ group, groupIndex, strongest });
+            });
 
-            if (matches.length === 0) return null;
-            const first = matches[0];
+            if (groupMatches.length === 0) return null;
+
+            const bestGroup = groupMatches.reduce((best, item) =>
+                Math.abs(item.strongest.changePercent) > Math.abs(best.strongest.changePercent) ? item : best
+            );
+            const conditions = bestGroup.group.conditions.map(condition => ({
+                hours: condition.hours,
+                threshold: condition.threshold
+            }));
+
             return {
-                changePercent: first.changePercent,
-                condition: { hours: first.condition.hours, threshold: first.condition.threshold, mode: 'or' }
+                changePercent: bestGroup.strongest.changePercent,
+                condition: {
+                    mode: 'group',
+                    groupIndex: bestGroup.groupIndex + 1,
+                    key: `group-${bestGroup.groupIndex + 1}-${conditions.map(c => `${c.hours}h-${c.threshold}`).join('_')}`,
+                    conditions
+                }
             };
         }
 
@@ -1955,7 +2042,7 @@
                 const maxHours = Math.max(...notificationConditions.map(condition => condition.hours || 0));
                 const timeWindowMs = maxHours * 60 * 60 * 1000;
                 if (token.updateTime && (now - token.updateTime) <= timeWindowMs) {
-                    debugLog(`发送通知: ${token.symbol} ${evaluated.changePercent.toFixed(2)}% (${notificationConditionMode.toUpperCase()})`);
+                    debugLog(`发送通知: ${token.symbol} ${evaluated.changePercent.toFixed(2)}% (${formatNotificationCondition(evaluated.condition)})`);
                     sendNotification(token, evaluated.changePercent, evaluated.condition);
                 }
             });
@@ -2008,21 +2095,16 @@
                 const data = localStorage.getItem('binanceNotificationSettings');
                 if (data) {
                     const parsed = JSON.parse(data);
-                    notificationConditions = parsed.conditions || [{ hours: 1, threshold: 30 }];
-                    notificationConditionMode = parsed.mode === 'and' ? 'and' : 'or';
+                    notificationConditionGroups = migrateNotificationSettings(parsed);
                 } else {
-                    notificationConditions = [{ hours: 1, threshold: 30 }];
-                    notificationConditionMode = 'or';
+                    notificationConditionGroups = createDefaultNotificationGroups();
                 }
-                const modeSelect = document.getElementById('notification-condition-mode');
-                if (modeSelect) modeSelect.value = notificationConditionMode;
+                syncNotificationConditionState();
                 renderConditionsList();
             } catch (error) {
                 console.error('加载通知设置失败:', error);
-                notificationConditions = [{ hours: 1, threshold: 30 }];
-                notificationConditionMode = 'or';
-                const modeSelect = document.getElementById('notification-condition-mode');
-                if (modeSelect) modeSelect.value = notificationConditionMode;
+                notificationConditionGroups = createDefaultNotificationGroups();
+                syncNotificationConditionState();
                 renderConditionsList();
             }
         }
@@ -2032,31 +2114,71 @@
             const container = document.getElementById('notification-conditions');
             if (!container) return;
 
-            if (notificationConditions.length === 0) {
+            syncNotificationConditionState();
+
+            if (notificationConditionGroups.length === 0) {
                 container.innerHTML = '<div class="text-xs text-gray-500 text-center py-2">暂无筛选条件</div>';
+                renderConditionGroupOptions();
                 return;
             }
 
-            container.innerHTML = notificationConditions.map((cond, index) => `
-                <div class="flex items-center justify-between bg-gray-700 rounded-md px-3 py-2">
-                    <span class="text-sm text-gray-200">
-                        <span class="text-accent font-medium">${cond.hours}h</span> 涨跌幅 ≥ <span class="text-warning font-medium">${cond.threshold}%</span>
-                        <span class="ml-2 text-xs text-gray-400">${notificationConditionMode.toUpperCase()}</span>
-                    </span>
-                    <button onclick="removeCondition(${index})" class="text-gray-400 hover:text-danger ml-2">
-                        <i class="fa fa-times"></i>
-                    </button>
+            container.innerHTML = notificationConditionGroups.map((group, groupIndex) => `
+                <div class="bg-gray-700 rounded-md p-3">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-white">规则组 ${groupIndex + 1}</span>
+                            <span class="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-accent">组内 AND</span>
+                            ${groupIndex > 0 ? '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-warning">组间 OR</span>' : ''}
+                        </div>
+                        <button onclick="removeConditionGroup(${groupIndex})" class="text-gray-400 hover:text-danger ml-2" title="删除规则组">
+                            <i class="fa fa-trash-o"></i>
+                        </button>
+                    </div>
+                    <div class="space-y-2">
+                        ${group.conditions.length === 0 ? '<div class="text-xs text-gray-500 py-1">暂无条件</div>' : group.conditions.map((cond, conditionIndex) => `
+                            <div class="flex items-center justify-between bg-gray-800 rounded-md px-3 py-2">
+                                <span class="text-sm text-gray-200">
+                                    <span class="text-accent font-medium">${cond.hours}h</span> 涨跌幅 ≥ <span class="text-warning font-medium">${cond.threshold}%</span>
+                                </span>
+                                <button onclick="removeCondition(${groupIndex}, ${conditionIndex})" class="text-gray-400 hover:text-danger ml-2" title="删除条件">
+                                    <i class="fa fa-times"></i>
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
                 </div>
             `).join('');
+
+            renderConditionGroupOptions();
+        }
+
+        function renderConditionGroupOptions() {
+            const select = document.getElementById('condition-group-select');
+            if (!select) return;
+
+            const previousValue = select.value;
+            select.innerHTML = notificationConditionGroups.map((group, index) =>
+                `<option value="${index}">规则组 ${index + 1}</option>`
+            ).join('');
+
+            if (notificationConditionGroups[Number(previousValue)]) {
+                select.value = previousValue;
+            }
         }
 
         // 添加筛选条件
         function addCondition() {
+            syncNotificationConditionState();
             const hoursInput = document.getElementById('new-condition-hours');
             const thresholdInput = document.getElementById('new-condition-threshold');
+            const groupSelect = document.getElementById('condition-group-select');
 
             const hours = parseFloat(hoursInput.value);
             const threshold = parseFloat(thresholdInput.value);
+            let groupIndex = groupSelect ? Number(groupSelect.value) : 0;
+            if (!Number.isInteger(groupIndex) || !notificationConditionGroups[groupIndex]) {
+                groupIndex = 0;
+            }
 
             if (!hours || hours < 0.1) {
                 alert('时间范围必须大于0.1小时');
@@ -2068,14 +2190,14 @@
                 return;
             }
 
-            // 检查是否已存在相同条件
-            const exists = notificationConditions.some(c => c.hours === hours && c.threshold === threshold);
+            const targetGroup = notificationConditionGroups[groupIndex];
+            const exists = targetGroup.conditions.some(c => c.hours === hours && c.threshold === threshold);
             if (exists) {
-                alert('该筛选条件已存在');
+                alert('该规则组内已存在相同条件');
                 return;
             }
 
-            notificationConditions.push({ hours, threshold });
+            targetGroup.conditions.push({ hours, threshold });
             renderConditionsList();
 
             // 清空输入框
@@ -2086,9 +2208,29 @@
             saveNotificationSettings();
         }
 
+        function addConditionGroup() {
+            notificationConditionGroups.push({ id: createNotificationGroupId(), conditions: [] });
+            renderConditionsList();
+            const select = document.getElementById('condition-group-select');
+            if (select) select.value = String(notificationConditionGroups.length - 1);
+            saveNotificationSettings();
+        }
+
         // 删除筛选条件
-        function removeCondition(index) {
-            notificationConditions.splice(index, 1);
+        function removeCondition(groupIndex, conditionIndex) {
+            if (!notificationConditionGroups[groupIndex]) return;
+            notificationConditionGroups[groupIndex].conditions.splice(conditionIndex, 1);
+            renderConditionsList();
+            saveNotificationSettings();
+        }
+
+        function removeConditionGroup(groupIndex) {
+            if (!notificationConditionGroups[groupIndex]) return;
+            if (notificationConditionGroups.length === 1) {
+                notificationConditionGroups[groupIndex].conditions = [];
+            } else {
+                notificationConditionGroups.splice(groupIndex, 1);
+            }
             renderConditionsList();
             saveNotificationSettings();
         }
@@ -2096,11 +2238,12 @@
         // 保存通知设置
         function saveNotificationSettings() {
             try {
-                const modeSelect = document.getElementById('notification-condition-mode');
-                notificationConditionMode = modeSelect && modeSelect.value === 'and' ? 'and' : 'or';
+                syncNotificationConditionState();
                 localStorage.setItem('binanceNotificationSettings', JSON.stringify({
+                    version: 2,
+                    groups: notificationConditionGroups,
                     conditions: notificationConditions,
-                    mode: notificationConditionMode
+                    mode: 'groups'
                 }));
                 updateConnectionStatus('通知设置保存成功', 'success');
             } catch (error) {
@@ -3710,14 +3853,13 @@
                 saveNotificationSettings();
             });
 
-            document.getElementById('notification-condition-mode').addEventListener('change', function() {
-                notificationConditionMode = this.value === 'and' ? 'and' : 'or';
-                renderConditionsList();
-            });
-
             // 添加筛选条件
             document.getElementById('add-condition-btn').addEventListener('click', function() {
                 addCondition();
+            });
+
+            document.getElementById('add-condition-group-btn').addEventListener('click', function() {
+                addConditionGroup();
             });
 
             // 推送渠道切换

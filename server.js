@@ -181,6 +181,62 @@ async function fetchJson(url, options = {}) {
   }
 }
 
+async function fetchProviderJson(url, options = {}) {
+  const { timeoutMs = FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'jiankong-local-monitor/0.2.0',
+        ...(fetchOptions.headers || {})
+      },
+      ...fetchOptions,
+      signal: fetchOptions.signal || controller.signal
+    });
+    const text = await response.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { raw: text };
+      }
+    }
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}: ${text || url}`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function readJsonBody(req, maxBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+
+    req.on('data', chunk => {
+      body += chunk;
+      if (Buffer.byteLength(body) > maxBytes) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+      }
+    });
+
+    req.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch {
+        reject(new Error('Invalid JSON body'));
+      }
+    });
+
+    req.on('error', reject);
+  });
+}
+
 async function fetchBinanceExcludedSymbols() {
   const excluded = new Set(alphaSymbols);
   const spot = await fetchJson('https://api.binance.com/api/v3/exchangeInfo').catch(() => ({ symbols: [] }));
@@ -578,11 +634,104 @@ function refreshAll(forceDiscovery = false) {
   runQuoteRefresh().catch(error => state.stats.errors.push(error.message));
 }
 
+function assertProviderSuccess(channel, data) {
+  const okByChannel = {
+    serverchan: data?.code === 0,
+    pushplus: data?.code === 200,
+    bark: data?.code === 200,
+    dingtalk: data?.errcode === 0,
+    wecom: data?.errcode === 0,
+    telegram: data?.ok === true
+  };
+
+  if (!okByChannel[channel]) {
+    throw new Error(data?.message || data?.msg || data?.errmsg || data?.raw || 'Push provider returned failure');
+  }
+}
+
+async function sendExternalPush(payload) {
+  const channel = String(payload.channel || '').trim();
+  const key = String(payload.key || '').trim();
+  const extra = String(payload.extra || '').trim();
+  const title = String(payload.title || '').trim();
+  const body = String(payload.body || '').trim();
+
+  if (!channel || !key || !title || !body) {
+    throw new Error('Missing push channel, key, title, or body');
+  }
+
+  let data;
+  switch (channel) {
+    case 'serverchan':
+      data = await fetchProviderJson(`https://sctapi.ftqq.com/${encodeURIComponent(key)}.send`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title, desp: body })
+      });
+      break;
+    case 'pushplus':
+      data = await fetchProviderJson('https://www.pushplus.plus/send', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: key, title, content: body, template: 'txt' })
+      });
+      break;
+    case 'bark': {
+      const baseUrl = key.startsWith('http')
+        ? key.replace(/\/+$/, '')
+        : `https://api.day.app/${encodeURIComponent(key)}`;
+      data = await fetchProviderJson(`${baseUrl}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`);
+      break;
+    }
+    case 'dingtalk': {
+      const url = key.startsWith('http') ? key : `https://oapi.dingtalk.com/robot/send?access_token=${encodeURIComponent(key)}`;
+      data = await fetchProviderJson(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          msgtype: 'markdown',
+          markdown: { title, text: `## ${title}\n\n${body}` }
+        })
+      });
+      break;
+    }
+    case 'wecom': {
+      const url = key.startsWith('http') ? key : `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${encodeURIComponent(key)}`;
+      data = await fetchProviderJson(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          msgtype: 'markdown',
+          markdown: { content: `## ${title}\n\n${body}` }
+        })
+      });
+      break;
+    }
+    case 'telegram':
+      if (!extra) throw new Error('Telegram push requires Chat ID');
+      data = await fetchProviderJson(`https://api.telegram.org/bot${key}/sendMessage`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: extra,
+          text: `<b>${title}</b>\n\n${body}`,
+          parse_mode: 'HTML'
+        })
+      });
+      break;
+    default:
+      throw new Error(`Unsupported push channel: ${channel}`);
+  }
+
+  assertProviderSuccess(channel, data);
+  return { channel, provider: data };
+}
+
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': '*',
-    'access-control-allow-methods': 'GET,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-headers': 'content-type',
     'cache-control': 'no-store'
   });
@@ -628,6 +777,24 @@ const server = http.createServer(async (req, res) => {
       stats: state.stats,
       tokens: state.tokens
     });
+    return;
+  }
+
+  if (url.pathname === '/api/push') {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'Method not allowed' });
+      return;
+    }
+
+    try {
+      const payload = await readJsonBody(req);
+      const result = await sendExternalPush(payload);
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (error) {
+      const message = error.message || 'Push failed';
+      const status = /^(Missing|Unsupported|Invalid|Telegram push requires)/.test(message) ? 400 : 502;
+      sendJson(res, status, { ok: false, error: message });
+    }
     return;
   }
 

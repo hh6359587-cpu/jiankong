@@ -295,7 +295,7 @@
                             </button>
                         </div>
                         <p class="text-xs text-gray-500 mt-3 leading-relaxed">
-                            推送密钥仅保存在当前浏览器本地。部分机器人接口可能限制浏览器跨域直连，若测试失败需通过后端代理转发。
+                            推送密钥仅保存在当前浏览器本地，发送时由本地后端代理转发，测试按钮会返回真实成功或失败状态。
                         </p>
                     </div>
                 </div>
@@ -659,6 +659,7 @@
         let notificationConditionGroups = createDefaultNotificationGroups();
         let notificationConditions = flattenNotificationGroups(notificationConditionGroups);
         let lastNotifications = {}; // 记录最近的通知，避免重复通知
+        let pushRetryFailures = {}; // 外部推送失败后单独重试，避免重复写通知历史
         let notificationsHistory = []; // 通知历史记录
         let unreadNotifications = 0; // 未读通知数
         const priceHistoryMaxAgeMs = 24 * 60 * 60 * 1000;
@@ -712,6 +713,7 @@
         let onchainFilteredTokens = [];
         let onchainRefreshInterval = null;
         const onchainBackendUrl = 'http://localhost:8090/api/onchain';
+        const pushProxyUrl = 'http://localhost:8090/api/push';
         const onchainRefreshMs = 10 * 1000;
         let useOnchainBackend = true;
         let binanceAllSymbols = new Set(); // 币安所有已上架代币symbol
@@ -1678,11 +1680,6 @@
                 : 'default';
             const notificationStore = options.notificationStore || lastNotifications;
             const notificationKey = `${options.keyPrefix || token.symbol}-${conditionKey}`;
-            const lastNotificationTime = notificationStore[notificationKey];
-            if (lastNotificationTime && (now - lastNotificationTime) < 5 * 60 * 1000) {
-                return; // 5分钟内不重复通知
-            }
-
             const isUp = priceChangePercent > 0;
             const conditionDesc = formatNotificationCondition(condition);
             const title = options.title || (isUp ? '🚀 代币暴涨' : '📉 代币暴跌');
@@ -1694,8 +1691,15 @@
                 ...extraLines
             ].join('\n');
 
+            const lastNotificationTime = notificationStore[notificationKey];
+            if (lastNotificationTime && (now - lastNotificationTime) < 5 * 60 * 1000) {
+                retryFailedPush(notificationKey, title, body, token);
+                return; // 5分钟内不重复通知历史和浏览器通知
+            }
+
             // 记录通知时间和历史。即使浏览器弹窗未授权，也保留历史记录和外部推送。
             notificationStore[notificationKey] = now;
+            delete pushRetryFailures[notificationKey];
 
             const notificationData = {
                 id: `${now}-${token.symbol}-${conditionKey}`,
@@ -1732,143 +1736,57 @@
                 }
             }
 
-            pushNotification(title, body, token);
+            pushNotification(title, body, token).then(result => {
+                if (result && result.skipped) return;
+                delete pushRetryFailures[notificationKey];
+                console.log('外部推送成功:', result);
+            }).catch(error => {
+                pushRetryFailures[notificationKey] = { lastAttempt: now, error: error.message };
+                console.error('外部推送失败:', error);
+                updateConnectionStatus(`外部推送失败：${error.message}`, 'error');
+            });
             debugLog('发送通知:', title, body);
         }
 
+        function retryFailedPush(notificationKey, title, body, token) {
+            const failure = pushRetryFailures[notificationKey];
+            if (!failure || Date.now() - failure.lastAttempt < 60 * 1000) return;
+
+            failure.lastAttempt = Date.now();
+            pushNotification(title, body, token).then(result => {
+                if (result && result.skipped) return;
+                delete pushRetryFailures[notificationKey];
+                console.log('外部推送重试成功:', result);
+            }).catch(error => {
+                failure.error = error.message;
+                console.error('外部推送重试失败:', error);
+            });
+        }
+
         // 推送通知到外部渠道
-        function pushNotification(title, body, token) {
+        async function pushNotification(title, body, token) {
             if (!pushSettings.enabled || !pushSettings.channel || !pushSettings.key) {
-                return;
+                return { ok: false, skipped: true, error: '推送未启用或未配置' };
             }
 
-            const channel = pushSettings.channel;
-            const key = pushSettings.key;
-            const extra = pushSettings.extra;
-
-            try {
-                switch (channel) {
-                    case 'serverchan':
-                        pushToServerChan(key, title, body);
-                        break;
-                    case 'pushplus':
-                        pushToPushPlus(key, title, body);
-                        break;
-                    case 'bark':
-                        pushToBark(key, title, body);
-                        break;
-                    case 'dingtalk':
-                        pushToDingTalk(key, title, body);
-                        break;
-                    case 'wecom':
-                        pushToWeCom(key, title, body);
-                        break;
-                    case 'telegram':
-                        pushToTelegram(key, extra, title, body);
-                        break;
-                    default:
-                        console.warn('未知的推送渠道:', channel);
-                }
-            } catch (error) {
-                console.error('推送通知失败:', error);
-            }
-        }
-
-        // Server酱推送（微信）
-        function pushToServerChan(sendKey, title, body) {
-            const url = `https://sctapi.ftqq.com/${sendKey}.send`;
-            fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: title, desp: body })
-            }).then(res => res.json()).then(data => {
-                console.log('Server酱推送结果:', data);
-            }).catch(err => {
-                console.error('Server酱推送失败:', err);
-            });
-        }
-
-        // PushPlus推送（微信）
-        function pushToPushPlus(token, title, body) {
-            const url = 'https://www.pushplus.plus/send';
-            fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token: token, title: title, content: body, template: 'txt' })
-            }).then(res => res.json()).then(data => {
-                console.log('PushPlus推送结果:', data);
-            }).catch(err => {
-                console.error('PushPlus推送失败:', err);
-            });
-        }
-
-        // Bark推送（iOS）
-        function pushToBark(key, title, body) {
-            const serverUrl = key.startsWith('http') ? key : 'https://api.day.app';
-            const barkKey = key.startsWith('http') ? key.split('/').pop() : key;
-            const url = `${serverUrl}/${barkKey}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`;
-            fetch(url).then(res => res.json()).then(data => {
-                console.log('Bark推送结果:', data);
-            }).catch(err => {
-                console.error('Bark推送失败:', err);
-            });
-        }
-
-        // 钉钉机器人推送
-        function pushToDingTalk(webhook, title, body) {
-            const url = webhook.startsWith('http') ? webhook : `https://oapi.dingtalk.com/robot/send?access_token=${webhook}`;
-            fetch(url, {
+            const response = await fetch(pushProxyUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    msgtype: 'markdown',
-                    markdown: { title: title, text: `## ${title}\n\n${body}` }
+                    channel: pushSettings.channel,
+                    key: pushSettings.key,
+                    extra: pushSettings.extra,
+                    title,
+                    body,
+                    token: token ? { symbol: token.symbol, type: token.type } : null
                 })
-            }).then(res => res.json()).then(data => {
-                console.log('钉钉推送结果:', data);
-            }).catch(err => {
-                console.error('钉钉推送失败:', err);
             });
-        }
-
-        // 企业微信机器人推送
-        function pushToWeCom(webhook, title, body) {
-            const url = webhook.startsWith('http') ? webhook : `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${webhook}`;
-            fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    msgtype: 'markdown',
-                    markdown: { content: `## ${title}\n\n${body}` }
-                })
-            }).then(res => res.json()).then(data => {
-                console.log('企业微信推送结果:', data);
-            }).catch(err => {
-                console.error('企业微信推送失败:', err);
-            });
-        }
-
-        // Telegram Bot推送
-        function pushToTelegram(botToken, chatId, title, body) {
-            if (!botToken || !chatId) {
-                console.error('Telegram推送缺少Bot Token或Chat ID');
-                return;
+            const result = await response.json().catch(() => ({ ok: false, error: '推送代理返回格式不正确' }));
+            if (!response.ok || !result.ok) {
+                throw new Error(result.error || `推送代理请求失败: ${response.status}`);
             }
-            const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-            const text = `<b>${title}</b>\n\n${body}`;
-            fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: chatId,
-                    text: text,
-                    parse_mode: 'HTML'
-                })
-            }).then(res => res.json()).then(data => {
-                console.log('Telegram推送结果:', data);
-            }).catch(err => {
-                console.error('Telegram推送失败:', err);
-            });
+            console.log('外部推送结果:', result);
+            return result;
         }
 
         function updateTokenPriceHistory(existingToken, price, timestamp) {
@@ -3873,7 +3791,7 @@
             });
 
             // 测试推送
-            document.getElementById('test-push').addEventListener('click', function() {
+            document.getElementById('test-push').addEventListener('click', async function() {
                 // 先保存设置
                 savePushSettings();
 
@@ -3891,8 +3809,23 @@
                     return;
                 }
 
-                pushNotification(testTitle, testBody, { symbol: 'TEST', type: 'test', price: 0 });
-                updateConnectionStatus('测试推送已发送', 'success');
+                const button = this;
+                const originalText = button.textContent;
+                button.disabled = true;
+                button.textContent = '测试中...';
+                updateConnectionStatus('正在发送测试推送', 'warning');
+
+                try {
+                    await pushNotification(testTitle, testBody, { symbol: 'TEST', type: 'test', price: 0 });
+                    updateConnectionStatus('测试推送成功，请检查微信', 'success');
+                } catch (error) {
+                    console.error('测试推送失败:', error);
+                    updateConnectionStatus(`测试推送失败：${error.message}`, 'error');
+                    alert(`测试推送失败：${error.message}`);
+                } finally {
+                    button.disabled = false;
+                    button.textContent = originalText;
+                }
             });
 
             // 标签页切换 - 币安代币

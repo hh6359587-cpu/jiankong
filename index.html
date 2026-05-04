@@ -1671,6 +1671,33 @@
             return `${condition.hours}h/${condition.threshold}%`;
         }
 
+        function formatNotificationHours(hours) {
+            const value = Number(hours);
+            if (!Number.isFinite(value) || value <= 0) return '指定时间';
+            if (value < 1) {
+                const minutes = Math.max(1, Math.round(value * 60));
+                return `${minutes}分钟`;
+            }
+            return Number.isInteger(value) ? `${value}小时` : `${value}小时`;
+        }
+
+        function getNotificationSymbol(token) {
+            const symbol = token && token.symbol ? token.symbol : getTokenSymbol(token);
+            if (!symbol) return '未知';
+            return token && token.type === 'onchain' ? symbol : baseSymbolFromPair(symbol) || symbol;
+        }
+
+        function formatNotificationTitle(token, priceChangePercent, condition) {
+            const symbol = getNotificationSymbol(token);
+            const prefix = token && token.type === 'onchain' ? '链上' : '';
+            const isUp = priceChangePercent > 0;
+            const direction = isUp ? '暴涨' : '暴跌';
+            const icon = isUp ? '🚀' : '📉';
+            const hours = condition && (condition.triggerHours || condition.hours);
+            const timeText = formatNotificationHours(hours);
+            return `${icon} ${prefix}${symbol}代币${timeText}内${direction}${Math.abs(priceChangePercent).toFixed(2)}%`;
+        }
+
         // 发送通知
         function sendNotification(token, priceChangePercent, condition, options = {}) {
             // 检查是否在最近5分钟内已经发送过该代币的通知
@@ -1682,7 +1709,7 @@
             const notificationKey = `${options.keyPrefix || token.symbol}-${conditionKey}`;
             const isUp = priceChangePercent > 0;
             const conditionDesc = formatNotificationCondition(condition);
-            const title = options.title || (isUp ? '🚀 代币暴涨' : '📉 代币暴跌');
+            const title = formatNotificationTitle(token, priceChangePercent, condition);
             const extraLines = Array.isArray(options.extraLines) ? options.extraLines : [];
             const body = [
                 token.symbol,
@@ -1890,6 +1917,8 @@
                 condition: {
                     mode: 'group',
                     groupIndex: bestGroup.groupIndex + 1,
+                    triggerHours: bestGroup.strongest.condition.hours,
+                    triggerThreshold: bestGroup.strongest.condition.threshold,
                     key: `group-${bestGroup.groupIndex + 1}-${conditions.map(c => `${c.hours}h-${c.threshold}`).join('_')}`,
                     conditions
                 }
@@ -1929,11 +1958,9 @@
 
                 const chain = chainNameMap[token.chainId] || token.chainId;
                 const key = getOnchainTokenKey(token);
-                const isUp = evaluated.changePercent > 0;
                 sendNotification(token, evaluated.changePercent, evaluated.condition, {
                     notificationStore: onchainLastNotifications,
                     keyPrefix: key,
-                    title: isUp ? '🚀 链上代币暴涨' : '📉 链上代币闪崩',
                     meta: {
                         chain,
                         address: getTokenAddress(token),

@@ -712,8 +712,9 @@
         let onchainTokens = [];
         let onchainFilteredTokens = [];
         let onchainRefreshInterval = null;
-        const onchainBackendUrl = 'http://localhost:8090/api/onchain';
-        const pushProxyUrl = 'http://localhost:8090/api/push';
+        const backendOrigin = window.location.port === '8090' ? window.location.origin : 'http://localhost:8090';
+        const onchainBackendUrl = `${backendOrigin}/api/onchain`;
+        const pushProxyUrl = `${backendOrigin}/api/push`;
         const onchainRefreshMs = 10 * 1000;
         let useOnchainBackend = true;
         let binanceAllSymbols = new Set(); // 币安所有已上架代币symbol

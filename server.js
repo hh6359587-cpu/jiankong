@@ -1,6 +1,11 @@
 import http from 'node:http';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { extname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.PORT || 8090);
+const STATIC_ROOT = fileURLToPath(new URL('.', import.meta.url));
 const REFRESH_INTERVAL_MS = 10 * 1000;
 const DISCOVERY_INTERVAL_MS = 10 * 60 * 1000;
 const HIGH_MARKET_CAP_THRESHOLD = 30_000_000;
@@ -8,6 +13,18 @@ const COINGECKO_MARKET_PAGES = 10;
 const FETCH_TIMEOUT_MS = 8 * 1000;
 const DISCOVERY_CONCURRENCY = 8;
 const QUOTE_CONCURRENCY = 6;
+const STATIC_CONTENT_TYPES = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.js', 'application/javascript; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.svg', 'image/svg+xml'],
+  ['.ico', 'image/x-icon'],
+  ['.txt', 'text/plain; charset=utf-8']
+]);
 
 const targetChains = {
   solana: { gecko: 'solana', label: 'SOL', coingeckoPlatform: 'solana' },
@@ -738,6 +755,47 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function resolveStaticFile(pathname) {
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+
+  const publicPath = decodedPath === '/' ? '/index.html' : decodedPath;
+  const filePath = resolve(STATIC_ROOT, `.${publicPath}`);
+  if (!filePath.startsWith(STATIC_ROOT)) return null;
+
+  const ext = extname(filePath).toLowerCase();
+  if (!STATIC_CONTENT_TYPES.has(ext)) return null;
+
+  return { filePath, contentType: STATIC_CONTENT_TYPES.get(ext) };
+}
+
+async function sendStaticFile(res, pathname) {
+  const target = resolveStaticFile(pathname);
+  if (!target) return false;
+
+  try {
+    const fileStat = await stat(target.filePath);
+    if (!fileStat.isFile()) return false;
+
+    res.writeHead(200, {
+      'content-type': target.contentType,
+      'content-length': fileStat.size,
+      'cache-control': 'no-store'
+    });
+    createReadStream(target.filePath).pipe(res);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Internal server error');
+    return true;
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -798,11 +856,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const served = await sendStaticFile(res, url.pathname);
+    if (served) return;
+  }
+
   sendJson(res, 404, { ok: false, error: 'Not found' });
 });
 
 server.listen(PORT, () => {
-  console.log(`Onchain aggregator running at http://localhost:${PORT}`);
+  console.log(`Jiankong preview running at http://localhost:${PORT}/index.html`);
+  console.log(`Onchain aggregator API running at http://localhost:${PORT}`);
   refreshAll(true);
   setInterval(() => {
     refreshAll(false);

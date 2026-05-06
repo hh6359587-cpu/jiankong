@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node server.js",
+    "preview": "node server.js",
     "backend": "node server.js"
   }
 }
